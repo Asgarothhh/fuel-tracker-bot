@@ -91,14 +91,14 @@ class ConfirmationHistory(Base):
 class LinkToken(Base):
     __tablename__ = "link_tokens"
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)  # <- nullable=True
     user = relationship("User", backref="link_tokens")
     token_hash = Column(String(128), nullable=False, index=True)
-    created_by = Column(Integer, nullable=True)  # admin user id who created
+    created_by = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime, nullable=False)
     used = Column(Boolean, default=False)
-    used_by = Column(Integer, nullable=True)  # telegram_id who used it
+    used_by = Column(Integer, nullable=True)
     used_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
