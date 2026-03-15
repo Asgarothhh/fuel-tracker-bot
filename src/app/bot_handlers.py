@@ -5,13 +5,14 @@ from aiogram.filters import Command
 from io import StringIO, BytesIO
 import csv
 from datetime import datetime, timezone, timedelta
-
 from src.app.config import ADMIN_TELEGRAM_ID, TOKEN_SALT, CODE_TTL_HOURS
-from src.app.db import get_db_session
 from src.app.tokens import verify_and_consume_code, create_bulk_codes, generate_code, hash_code
-from src.app.permissions import require_permission
 from src.app.models import LinkToken, User
-
+from src.app.belorusneft_api import fetch_operational_report, parse_operations
+from datetime import datetime, timedelta
+from src.app.db import get_db_session
+from src.app.models import FuelOperation
+from src.app.permissions import require_permission
 # --- Вспомогательная функция для извлечения аргументов команды ---
 def extract_args(message: types.Message) -> str:
     text = message.text or ""
@@ -156,9 +157,48 @@ async def cmd_export_codes(message: types.Message):
         await message.reply_document(InputFile(bio, filename=bio.name))
 
 
+
+@require_permission("admin:manage")
+async def cmd_run_import_now(message: types.Message):
+    date = datetime.now() - timedelta(days=1)
+
+    try:
+        payload = fetch_operational_report(date)
+        ops = parse_operations(payload)
+
+        new_count = 0
+
+        with get_db_session() as db:
+            for op in ops:
+                exists = db.query(FuelOperation).filter_by(
+                    source="api",
+                    doc_number=op["doc_number"],
+                    date_time=op["date_time"]
+                ).first()
+
+                if exists:
+                    continue
+
+                db.add(FuelOperation(
+                    source="api",
+                    api_data=op["raw"],
+                    date_time=op["date_time"],
+                    imported_at=datetime.now(timezone.utc),
+                    status="loaded"
+                ))
+                new_count += 1
+
+        await message.reply(f"Импорт завершён. Новых операций: {new_count}")
+
+    except Exception as e:
+        await message.reply(f"Ошибка импорта: {e}")
+
+
 # --- Регистрация обработчиков ---
 def register_handlers(dp: Dispatcher):
     dp.message.register(cmd_start, Command(commands=["start"]))
     dp.message.register(cmd_link, Command(commands=["link"]))
     dp.message.register(cmd_generate_codes, Command(commands=["generate_codes"]))
     dp.message.register(cmd_export_codes, Command(commands=["export_codes"]))
+    dp.message.register(cmd_run_import_now, Command(commands=["run_import_now"]))
+
