@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 import logging
 from src.app.config import TOKEN_SALT, CODE_TTL_HOURS
 from src.app.tokens import verify_and_consume_code, generate_code, hash_code
-from src.app.models import LinkToken, User, FuelOperation
+from src.app.models import LinkToken, User, FuelOperation, Schedule
 from src.app.belorusneft_api import fetch_operational_raw, parse_operations
 from src.app.db import get_db_session
 from src.app.permissions import require_permission, user_has_permission
@@ -30,13 +30,19 @@ async def cmd_start(message: types.Message):
     print("DEBUG: tg_id =", message.from_user.id, "username=", getattr(message.from_user, "username", None))
 
     kb_user = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="/link"), KeyboardButton(text="/myprofile")]],
+        keyboard=[
+            [KeyboardButton(text="/link"), KeyboardButton(text="/myprofile")]
+        ],
         resize_keyboard=True
     )
+
     kb_admin = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="/users")],
-                  [KeyboardButton(text="/generate_code")],
-                  [KeyboardButton(text="/run_import_now")]],
+        keyboard=[
+            [KeyboardButton(text="📥 Обновить импорт"), KeyboardButton(text="🔎 Тестовый импорт")],
+            [KeyboardButton(text="🗓 Расписания"), KeyboardButton(text="➕ Установить расписание")],
+            [KeyboardButton(text="🗑 Удалить расписание"), KeyboardButton(text="👥 Пользователи")],
+            [KeyboardButton(text="🔐 Сгенерировать код"), KeyboardButton(text="📤 Экспорт кодов")]
+        ],
         resize_keyboard=True
     )
 
@@ -44,9 +50,10 @@ async def cmd_start(message: types.Message):
         is_admin = user_has_permission(db, message.from_user.id, "admin:manage")
 
     if is_admin:
-        await message.reply("Привет, админ.", reply_markup=kb_admin)
+        await message.reply("Привет, админ. Выберите действие кнопкой или введите команду:", reply_markup=kb_admin)
     else:
         await message.reply("Привет! Для привязки аккаунта используйте /link <код>.", reply_markup=kb_user)
+
 
 async def cmd_myprofile(message: types.Message):
     tg = message.from_user.id
@@ -106,6 +113,70 @@ async def cmd_link(message: types.Message):
     await message.reply(info)
 
 # --- Админские команды и callbacks ---
+# /schedule_get
+@require_permission("admin:manage")
+async def cmd_schedule_get(message: types.Message):
+    with get_db_session() as db:
+        rows = db.query(Schedule).all()
+    if not rows:
+        await message.reply("Расписаний нет.")
+        return
+    lines = []
+    for r in rows:
+        tz_hour = r.cron_hour  # хранится в UTC
+        lines.append(f"{r.name}: {tz_hour:02d}:{r.cron_minute:02d} UTC — {'вкл' if r.enabled else 'выкл'} (last_run: {r.last_run})")
+    await message.reply("\n".join(lines))
+
+# /schedule_set <name> <HH:MM> (в локальном времени админа — будем ожидать UTC или указывать, что ввод в UTC)
+@require_permission("admin:manage")
+async def cmd_schedule_set(message: types.Message):
+    args = extract_args(message)
+    parts = args.split()
+    if len(parts) < 2:
+        await message.reply("Использование: /schedule_set <name> <HH:MM UTC>")
+        return
+    name = parts[0]
+    try:
+        hh, mm = parts[1].split(":")
+        hour = int(hh); minute = int(mm)
+        if not (0 <= hour < 24 and 0 <= minute < 60):
+            raise ValueError
+    except Exception:
+        await message.reply("Неверное время. Формат HH:MM (UTC).")
+        return
+
+    with get_db_session() as db:
+        sched = db.query(Schedule).filter_by(name=name).first()
+        if not sched:
+            sched = Schedule(name=name, cron_hour=hour, cron_minute=minute, enabled=True)
+            db.add(sched)
+        else:
+            sched.cron_hour = hour
+            sched.cron_minute = minute
+            sched.enabled = True
+        db.commit()
+
+    # обновляем планировщик в памяти
+    from src.app.scheduler import schedule_daily_import
+    schedule_daily_import(name, hour, minute)
+    await message.reply(f"Расписание {name} установлено на {hour:02d}:{minute:02d} UTC")
+
+# /schedule_remove <name>
+@require_permission("admin:manage")
+async def cmd_schedule_remove(message: types.Message):
+    args = extract_args(message).strip()
+    if not args:
+        await message.reply("Использование: /schedule_remove <name>")
+        return
+    name = args
+    with get_db_session() as db:
+        sched = db.query(Schedule).filter_by(name=name).first()
+        if sched:
+            db.delete(sched)
+            db.commit()
+    from src.app.scheduler import remove_schedule
+    remove_schedule(name)
+    await message.reply(f"Расписание {name} удалено.")
 
 @require_permission("admin:manage")
 async def cmd_users(message: types.Message):
@@ -319,6 +390,20 @@ async def callback_revoke_code(call: types.CallbackQuery):
     await call.answer()
 
 # --- Импорт операций ---
+@require_permission("admin:manage")
+async def cmd_run_import_now_dry(message: types.Message):
+    """
+    Dry-run: парсит и логирует операции, но не сохраняет в БД.
+    Использует run_import_job(dry_run=True) из jobs.py.
+    """
+    from src.app.jobs import run_import_job
+    try:
+        # запускаем синхронно: run_import_job делает всю работу и пишет в логи
+        run_import_job("manual_dry_run", dry_run=True)
+        await message.reply("Тестовый импорт выполнен (dry‑run). Проверьте логи и debug‑дампы. Ничего не сохранено.")
+    except Exception as e:
+        logging.getLogger(__name__).exception("Error during dry-run import")
+        await message.reply(f"Ошибка при выполнении тестового импорта: {e}")
 
 @require_permission("admin:manage")
 async def cmd_run_import_now(message: types.Message):
@@ -480,6 +565,40 @@ async def cmd_export_codes(message: types.Message):
         await message.reply_document(InputFile(bio, filename=bio.name))
 
 # --- Регистрация обработчиков ---
+# Обёртки для текстовых кнопок (чистые функции, без лямбд)
+@require_permission("admin:manage")
+async def btn_update_import(message: types.Message):
+    await cmd_run_import_now(message)
+
+@require_permission("admin:manage")
+async def btn_test_import(message: types.Message):
+    await cmd_run_import_now_dry(message)
+
+@require_permission("admin:manage")
+async def btn_schedule_list(message: types.Message):
+    await cmd_schedule_get(message)
+
+@require_permission("admin:manage")
+async def btn_schedule_set(message: types.Message):
+    await message.reply("Использование: /schedule_set <name> <HH:MM UTC>\nПример: /schedule_set belorusneft_daily 01:30 UTC")
+
+@require_permission("admin:manage")
+async def btn_schedule_remove(message: types.Message):
+    await message.reply("Использование: /schedule_remove <name>\nПример: /schedule_remove belorusneft_daily")
+
+@require_permission("admin:manage")
+async def btn_users(message: types.Message):
+    await cmd_users(message)
+
+@require_permission("admin:manage")
+async def btn_generate_code(message: types.Message):
+    await message.reply("Использование: /generate_code <user_id>\nПример: /generate_code 42")
+
+@require_permission("admin:manage")
+async def btn_export_codes(message: types.Message):
+    await cmd_export_codes(message)
+
+
 def register_handlers(dp: Dispatcher):
     dp.message.register(cmd_start, Command(commands=["start"]))
     dp.message.register(cmd_link, Command(commands=["link"]))
@@ -488,6 +607,10 @@ def register_handlers(dp: Dispatcher):
     dp.message.register(cmd_generate_code, Command(commands=["generate_code"]))
     dp.message.register(cmd_export_codes, Command(commands=["export_codes"]))
     dp.message.register(cmd_run_import_now, Command(commands=["run_import_now"]))
+    dp.message.register(cmd_schedule_get, Command(commands=["schedule_get"]))
+    dp.message.register(cmd_schedule_set, Command(commands=["schedule_set"]))
+    dp.message.register(cmd_schedule_remove, Command(commands=["schedule_remove"]))
+    dp.message.register(cmd_run_import_now_dry, Command(commands=["run_import_now_dry"]))
 
     # callback handlers
     dp.callback_query.register(callback_users_page, lambda c: c.data and c.data.startswith("users_page:"))
@@ -496,4 +619,14 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(callback_send_code, lambda c: c.data and c.data.startswith("send_code:"))
     dp.callback_query.register(callback_revoke_code, lambda c: c.data and c.data.startswith("revoke_code:"))
     # noop handler to avoid errors on "Закрыть"
+    # текстовые кнопки (ReplyKeyboard) — сопоставление текста кнопки с обработчиком
+    dp.message.register(btn_update_import, lambda m: m.text == "📥 Обновить импорт")
+    dp.message.register(btn_test_import, lambda m: m.text == "🔎 Тестовый импорт")
+    dp.message.register(btn_schedule_list, lambda m: m.text == "🗓 Расписания")
+    dp.message.register(btn_schedule_set, lambda m: m.text == "➕ Установить расписание")
+    dp.message.register(btn_schedule_remove, lambda m: m.text == "🗑 Удалить расписание")
+    dp.message.register(btn_users, lambda m: m.text == "👥 Пользователи")
+    dp.message.register(btn_generate_code, lambda m: m.text == "🔐 Сгенерировать код")
+    dp.message.register(btn_export_codes, lambda m: m.text == "📤 Экспорт кодов")
+
     dp.callback_query.register(lambda c: c.answer(), lambda c: c.data == "noop")

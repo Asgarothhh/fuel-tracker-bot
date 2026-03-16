@@ -114,3 +114,13 @@ class LinkToken(Base):
         Index("ix_linktokens_status_expires", "status", "expires_at"),
     )
 
+class Schedule(Base):
+    __tablename__ = "schedules"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)  # e.g., "belorusneft_daily"
+    cron_hour = Column(Integer, nullable=False)   # hour in 0-23 (UTC)
+    cron_minute = Column(Integer, nullable=False) # minute 0-59
+    enabled = Column(Boolean, default=True)
+    last_run = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
