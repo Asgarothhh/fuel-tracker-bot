@@ -70,11 +70,16 @@ class FuelOperation(Base):
     confirmed_user = relationship("User", foreign_keys=[confirmed_user_id])
     car_from_api = Column(String(50))
     actual_car = Column(String(50))
+
+    doc_number = Column(String(64), nullable=True, index=True)
+    date_time = Column(DateTime, nullable=True, index=True)
+
     imported_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     confirmed_at = Column(DateTime, nullable=True)
     exported_to_excel = Column(Boolean, default=False)
     ready_for_waybill = Column(Boolean, default=False)
     status = Column(String(50), default="new")
+
 
 class ConfirmationHistory(Base):
     __tablename__ = "confirmation_history"

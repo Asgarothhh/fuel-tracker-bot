@@ -5,10 +5,11 @@ from aiogram.filters import Command
 from io import StringIO, BytesIO
 import csv
 from datetime import datetime, timezone, timedelta
+import logging
 from src.app.config import TOKEN_SALT, CODE_TTL_HOURS
 from src.app.tokens import verify_and_consume_code, generate_code, hash_code
 from src.app.models import LinkToken, User, FuelOperation
-from src.app.belorusneft_api import fetch_operational_report, parse_operations
+from src.app.belorusneft_api import fetch_operational_raw, parse_operations
 from src.app.db import get_db_session
 from src.app.permissions import require_permission, user_has_permission
 from sqlalchemy.exc import IntegrityError
@@ -66,14 +67,12 @@ async def cmd_link(message: types.Message):
         return
 
     code = args.split()[0]
-    # verify_and_consume_code должен работать внутри сессии и возвращать минимальные данные
     with get_db_session() as db:
         ok, result = verify_and_consume_code(db, code, message.from_user.id)
         if not ok:
             reason = result
             user_row = None
         else:
-            # ожидаем, что result содержит user_id или dict с user_id
             if isinstance(result, dict) and "user_id" in result:
                 user_id = result["user_id"]
             elif hasattr(result, "user_id"):
@@ -153,9 +152,6 @@ async def cmd_users(message: types.Message):
 
 @require_permission("admin:manage")
 async def cmd_generate_code(message: types.Message):
-    """
-    /generate_code <user_id>
-    """
     args = extract_args(message)
     if not args:
         await message.reply("Использование: /generate_code <user_id>")
@@ -178,7 +174,6 @@ async def cmd_generate_code(message: types.Message):
         code_hash = hash_code(code_plain, TOKEN_SALT)
         expires_at = datetime.now(timezone.utc) + timedelta(hours=CODE_TTL_HOURS)
 
-        # Используем поле code_hash (в модели поле называется code_hash)
         token = LinkToken(user_id=user_id, code_hash=code_hash, created_by=admin_id, created_at=datetime.now(timezone.utc), expires_at=expires_at)
         try:
             db.add(token)
@@ -190,7 +185,6 @@ async def cmd_generate_code(message: types.Message):
             await message.reply("Не удалось сгенерировать код (конфликт). Попробуйте ещё раз.")
             return
 
-    # сохраняем plain-код временно
     PENDING_PLAINS[token_id] = (code_plain, datetime.now(timezone.utc) + timedelta(minutes=10))
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -331,35 +325,111 @@ async def cmd_run_import_now(message: types.Message):
     date = datetime.now() - timedelta(days=1)
 
     try:
-        payload = fetch_operational_report(date)
-        ops = parse_operations(payload)
+        raw = fetch_operational_raw(date)
+        status = raw.get("status")
+        json_payload = raw.get("json")
+        debug_files = raw.get("debug_files") or []
+
+        if status != 200:
+            await message.reply(f"Запрос вернул статус {status}. Debug файлы: {', '.join(debug_files)}")
+            return
+
+        if not json_payload:
+            await message.reply(f"JSON не получен. Debug файлы: {', '.join(debug_files)}")
+            return
+
+        ops = parse_operations(json_payload)
+        if not ops:
+            await message.reply(f"В ответе найдено элементов: 0 (импорт временно отключён)")
+            return
 
         new_count = 0
-
         with get_db_session() as db:
             for op in ops:
-                exists = db.query(FuelOperation).filter_by(
-                    source="api",
-                    doc_number=op.get("doc_number"),
-                    date_time=op.get("date_time")
-                ).first()
+                # raw date string from API
+                dt_raw = op.get("date_time")
+                dt_obj = None
+                if dt_raw:
+                    # try parse ISO-like string to datetime
+                    try:
+                        dt_obj = datetime.fromisoformat(dt_raw)
+                    except Exception:
+                        # если не ISO, оставляем None (будем сохранять строку)
+                        dt_obj = None
+
+                # doc_number from API (may be int) -> normalize to string
+                doc = op.get("doc_number")
+                if doc is not None:
+                    try:
+                        doc = str(doc)
+                    except Exception:
+                        doc = None
+
+                date_key = dt_obj or dt_raw
+
+                # --- безопасная проверка дублей ---
+                filters = [FuelOperation.source == "api"]
+                used_filters = []
+
+                if doc:
+                    if hasattr(FuelOperation, "doc_number"):
+                        # doc_number is string in DB, so compare as string
+                        filters.append(FuelOperation.doc_number == doc)
+                        used_filters.append("doc_number")
+                    else:
+                        # fallback: search inside api_data JSON/text
+                        try:
+                            filters.append(FuelOperation.api_data.contains({"docNumber": doc}))
+                            used_filters.append("api_data.contains(docNumber)")
+                        except Exception:
+                            try:
+                                # api_data may be JSON stored as text; use LIKE as last resort
+                                filters.append(FuelOperation.api_data.like(f"%{doc}%"))
+                                used_filters.append("api_data.like(doc)")
+                            except Exception:
+                                used_filters.append("no_doc_filter_available")
+
+                if date_key and hasattr(FuelOperation, "date_time"):
+                    # date_time is datetime column; ensure dt_obj is datetime for comparison
+                    if isinstance(date_key, datetime):
+                        filters.append(FuelOperation.date_time == date_key)
+                        used_filters.append("date_time")
+                    else:
+                        # если date_key — строка, попытка сравнить со столбцом datetime может не сработать;
+                        # пропускаем фильтр по дате в этом случае
+                        used_filters.append("date_key_not_datetime; skipped date filter")
+
+                logging.getLogger(__name__).debug("Checking existing FuelOperation with filters: %s", used_filters)
+                exists = db.query(FuelOperation).filter(*filters).first()
+                # --- конец проверки дублей ---
 
                 if exists:
                     continue
 
-                db.add(FuelOperation(
+                # создаём запись; заполняем doc_number/date_time если такие поля есть
+                new_op = FuelOperation(
                     source="api",
                     api_data=op.get("raw"),
-                    date_time=op.get("date_time"),
                     imported_at=datetime.now(timezone.utc),
                     status="loaded"
-                ))
+                )
+                if hasattr(FuelOperation, "doc_number") and doc:
+                    setattr(new_op, "doc_number", doc)
+                if hasattr(FuelOperation, "date_time") and isinstance(date_key, datetime):
+                    setattr(new_op, "date_time", date_key)
+
+                db.add(new_op)
                 new_count += 1
+            db.commit()
 
         await message.reply(f"Импорт завершён. Новых операций: {new_count}")
 
     except Exception as e:
-        await message.reply(f"Ошибка импорта: {e}")
+        import logging as _logging
+        _logging.getLogger(__name__).exception("Error during run_import_now")
+        await message.reply(f"Ошибка при выполнении запроса: {e}")
+
+
 
 # --- Экспорт токенов ---
 
