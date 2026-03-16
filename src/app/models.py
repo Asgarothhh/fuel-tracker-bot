@@ -1,6 +1,6 @@
 # src/app/models.py
 from sqlalchemy import (
-    Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, Table, UniqueConstraint
+    Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, Table, UniqueConstraint, Index
 )
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
@@ -90,17 +90,22 @@ class ConfirmationHistory(Base):
 
 class LinkToken(Base):
     __tablename__ = "link_tokens"
+
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)  # <- nullable=True
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     user = relationship("User", backref="link_tokens")
-    token_hash = Column(String(128), nullable=False, index=True)
-    created_by = Column(Integer, nullable=True)
+    code_hash = Column(String(128), nullable=False, index=True)  # sha256(code)
+    # OPTIONAL: если хотите показывать код один раз, не храните plain в БД.
+    created_by = Column(Integer, nullable=True)  # id администратора
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime, nullable=False)
-    used = Column(Boolean, default=False)
-    used_by = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False, default="new")  # new, used, expired, revoked
+    telegram_id = Column(Integer, nullable=True, index=True)  # заполняется при авторизации
     used_at = Column(DateTime, nullable=True)
+    note = Column(Text, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "token_hash", name="uq_user_token"),
+        UniqueConstraint("code_hash", name="uq_linktoken_codehash"),
+        Index("ix_linktokens_status_expires", "status", "expires_at"),
     )
+
