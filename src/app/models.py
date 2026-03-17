@@ -1,6 +1,6 @@
 # src/app/models.py
 from sqlalchemy import (
-    Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, Table, UniqueConstraint
+    Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, Table, UniqueConstraint, Index
 )
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
@@ -70,11 +70,16 @@ class FuelOperation(Base):
     confirmed_user = relationship("User", foreign_keys=[confirmed_user_id])
     car_from_api = Column(String(50))
     actual_car = Column(String(50))
+
+    doc_number = Column(String(64), nullable=True, index=True)
+    date_time = Column(DateTime, nullable=True, index=True)
+
     imported_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     confirmed_at = Column(DateTime, nullable=True)
     exported_to_excel = Column(Boolean, default=False)
     ready_for_waybill = Column(Boolean, default=False)
     status = Column(String(50), default="new")
+
 
 class ConfirmationHistory(Base):
     __tablename__ = "confirmation_history"
@@ -90,17 +95,32 @@ class ConfirmationHistory(Base):
 
 class LinkToken(Base):
     __tablename__ = "link_tokens"
+
     id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)  # <- nullable=True
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     user = relationship("User", backref="link_tokens")
-    token_hash = Column(String(128), nullable=False, index=True)
-    created_by = Column(Integer, nullable=True)
+    code_hash = Column(String(128), nullable=False, index=True)  # sha256(code)
+    # OPTIONAL: если хотите показывать код один раз, не храните plain в БД.
+    created_by = Column(Integer, nullable=True)  # id администратора
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime, nullable=False)
-    used = Column(Boolean, default=False)
-    used_by = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False, default="new")  # new, used, expired, revoked
+    telegram_id = Column(Integer, nullable=True, index=True)  # заполняется при авторизации
     used_at = Column(DateTime, nullable=True)
+    note = Column(Text, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "token_hash", name="uq_user_token"),
+        UniqueConstraint("code_hash", name="uq_linktoken_codehash"),
+        Index("ix_linktokens_status_expires", "status", "expires_at"),
     )
+
+class Schedule(Base):
+    __tablename__ = "schedules"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)  # e.g., "belorusneft_daily"
+    cron_hour = Column(Integer, nullable=False)   # hour in 0-23 (UTC)
+    cron_minute = Column(Integer, nullable=False) # minute 0-59
+    enabled = Column(Boolean, default=True)
+    last_run = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
