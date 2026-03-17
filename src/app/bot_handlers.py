@@ -517,6 +517,9 @@ async def cmd_run_import_now(message: types.Message):
                     except Exception:
                         doc = None
 
+                # ← ВОТ СЮДА ВСТАВЛЯЕМ
+                logging.info(f"Checking op: doc={doc}, dt={dt_obj}")
+
                 # dedupe
                 filters = [FuelOperation.source == "api"]
                 if doc and hasattr(FuelOperation, "doc_number"):
