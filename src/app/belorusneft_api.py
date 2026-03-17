@@ -47,6 +47,11 @@ def auth() -> str:
     logging.info("Belorusneft: requesting token for user=%s", get_username())
     r = session.post(TOKEN_URL, data=data, headers=headers, timeout=15)
 
+    from src.app.belorusneft_api import save_debug_dump
+
+    prefix = f"belorusneft_auth_debug_{int(time.time())}"
+    save_debug_dump(prefix, r.request, r)
+
     logging.debug("Auth request url=%s headers=%s body=%s", getattr(r.request, "url", TOKEN_URL), r.request.headers, getattr(r.request, "body", None))
     logging.debug("Auth response status=%s body=%s", r.status_code, r.text[:2000])
 

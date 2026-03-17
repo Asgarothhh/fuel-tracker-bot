@@ -9,6 +9,7 @@ from io import StringIO, BytesIO
 import csv
 from datetime import datetime, timezone, timedelta
 import logging
+from sqlalchemy import cast, String
 
 from src.app.config import TOKEN_SALT, CODE_TTL_HOURS
 from src.app.tokens import verify_and_consume_code, generate_code, hash_code
@@ -550,9 +551,14 @@ async def cmd_run_import_now(message: types.Message):
                 else:
                     if card_num:
                         try:
-                            presumed_user = db.query(User).filter(User.cards.contains([card_num])).first()
+                            presumed_user = (
+                                db.query(User)
+                                .filter(cast(User.cards, String).like(f"%{card_num}%"))
+                                .first()
+                            )
                         except Exception:
-                            presumed_user = db.query(User).filter(User.cards.like(f"%{card_num}%")).first()
+                            presumed_user = None
+
                         if presumed_user and fuel_card:
                             fuel_card.user_id = presumed_user.id
 
@@ -594,9 +600,77 @@ async def cmd_run_import_now(message: types.Message):
 
                 db.add(new_op)
                 new_count += 1
+
             db.commit()
 
-        # notify admins
+        # notify admins — SAFE VERSION (no DetachedInstanceError)
+        admin_rows = []
+        with get_db_session() as db2:
+            for u in db2.query(User).filter(User.telegram_id != None).all():
+                try:
+                    if user_has_permission(db2, u.telegram_id, "admin:manage"):
+                        admin_rows.append(u)
+                except Exception:
+                    continue
+
+        if new_count > 0 and admin_rows:
+            # Собираем данные заранее, пока сессия открыта
+            with get_db_session() as db3:
+                recent_ops_raw = []
+                recent_ops = (
+                    db3.query(
+                        FuelOperation.id,
+                        FuelOperation.doc_number,
+                        FuelOperation.date_time,
+                        FuelOperation.api_data,
+                    )
+                    .order_by(FuelOperation.imported_at.desc())
+                    .limit(new_count)
+                    .all()
+                )
+
+                for op_id, doc_number, date_time, api_data in recent_ops:
+                    api = api_data or {}
+                    recent_ops_raw.append({
+                        "id": op_id,
+                        "doc": doc_number or api.get("docNumber") or api.get("doc_number"),
+                        "dt": date_time.isoformat() if date_time else api.get("dateTimeIssue"),
+                        "card": api.get("cardNumber") or api.get("card_number") or "—",
+                        "azs": api.get("azsNumber") or api.get("azs") or "—",
+                        "qty": api.get("productQuantity") or api.get("quantity") or "—",
+                    })
+
+            # Теперь отправляем уведомления
+            for admin in admin_rows:
+                for op in recent_ops_raw:
+                    text = (
+                        "Новая операция из API:\n"
+                        f"ID: {op['id']}\n"
+                        f"Дата: {op['dt']}\n"
+                        f"Карта: {op['card']}\n"
+                        f"АЗС: {op['azs']}\n"
+                        f"Чек: {op['doc']}\n"
+                        f"Кол-во: {op['qty']}"
+                    )
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_op:{op['id']}")],
+                        [InlineKeyboardButton(text="👤 Назначить пользователя", callback_data=f"assign_op:{op['id']}")],
+                        [InlineKeyboardButton(text="⚠️ Пометить спорной", callback_data=f"mark_dispute:{op['id']}")]
+                    ])
+                    try:
+                        await message.bot.send_message(admin.telegram_id, text, reply_markup=kb)
+                    except Exception:
+                        logging.getLogger(__name__).warning(
+                            "Не удалось отправить администратору %s сообщение о операции %s",
+                            admin.id, op["id"]
+                        )
+
+        await message.reply(f"Импорт завершён. Новых операций: {new_count}")
+
+    except Exception as e:
+        logging.getLogger(__name__).exception("Error during run_import_now")
+        await message.reply(f"Ошибка при выполнении запроса: {e}")
+
         def format_op_short(op):
             api = op.api_data or {}
             doc = getattr(op, "doc_number", "") or api.get("docNumber", "") or api.get("doc_number", "")
