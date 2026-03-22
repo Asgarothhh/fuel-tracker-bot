@@ -1,109 +1,83 @@
 # src/app/jobs.py
-from datetime import datetime, timedelta, timezone
 import logging
+from datetime import datetime, timedelta, timezone
+from sqlalchemy.exc import SQLAlchemyError
 from src.app.belorusneft_api import fetch_operational_raw, parse_operations
 from src.app.db import get_db_session
-from src.app.models import FuelOperation, Schedule
-from sqlalchemy.exc import SQLAlchemyError
+from src.app.models import FuelOperation, Schedule, User, FuelCard, Car
+from src.app.bot_handlers import send_operation_to_user
 
-def run_import_job(schedule_name: str, dry_run: bool = False):
-    """
-    Запускается планировщиком. Берёт расписание по name (для логики/last_run),
-    запрашивает данные за предыдущий календарный день (по UTC+3 -> учитываем смещение),
-    парсит, дедуплицирует и сохраняет новые операции.
-    """
-    log = logging.getLogger(__name__)
+
+async def run_import_job(schedule_name: str, dry_run: bool = False): # <-- Проверьте наличие dry_run=False    log = logging.getLogger(__name__)
     try:
-        # определяем дату предыдущего дня в локальном API времени (UTC+3)
+        # 1. Получаем данные из API (за вчера)
         now_utc = datetime.now(timezone.utc)
-        # API docs say service timezone UTC+3; чтобы получить "вчера" по API, смещаем:
         api_tz_offset = 3
         local_now = now_utc + timedelta(hours=api_tz_offset)
         target_date_local = (local_now - timedelta(days=1)).date()
-        # формируем datetime для передачи в fetch_operational_raw (функция ожидает datetime)
         target_dt = datetime.combine(target_date_local, datetime.min.time())
-        # вызываем API
+
         raw = fetch_operational_raw(target_dt)
-        status = raw.get("status")
-        if status != 200:
-            log.error("Import job %s: API returned status %s", schedule_name, status)
-            return
-
-        payload = raw.get("json")
-        if not payload:
-            log.info("Import job %s: no JSON payload", schedule_name)
-            return
-
-        ops = parse_operations(payload)
-        log.info("Import job %s: parsed %d operations", schedule_name, len(ops))
-
-        if dry_run:
-            log.info("Dry-run enabled: not saving operations")
-            return
+        operations = parse_operations(raw)
 
         new_count = 0
         with get_db_session() as db:
-            for op in ops:
-                # нормализация
-                doc = op.get("doc_number")
-                if doc is not None:
-                    doc = str(doc)
-                dt_raw = op.get("date_time")
-                dt_obj = None
-                if dt_raw:
-                    try:
-                        dt_obj = datetime.fromisoformat(dt_raw)
-                    except Exception:
-                        dt_obj = None
+            for op_data in operations:
+                # 2. Проверка на дубли (Дата + Чек)
+                doc = str(op_data.get("doc_number") or "")
+                dt_obj = op_data.get("date_time")
 
-                # дедупликация: сначала по doc+date, затем по card+azs+quantity
-                filters = [FuelOperation.source == "api"]
-                if doc:
-                    filters.append(FuelOperation.doc_number == doc)
-                if dt_obj and hasattr(FuelOperation, "date_time"):
-                    filters.append(FuelOperation.date_time == dt_obj)
+                exists = db.query(FuelOperation).filter(
+                    FuelOperation.date_time == dt_obj,
+                    FuelOperation.doc_number == doc
+                ).first()
 
-                exists = db.query(FuelOperation).filter(*filters).first()
                 if exists:
                     continue
 
-                # fallback: более мягкая проверка (card+azs+quantity)
-                card = op.get("card_number")
-                azs = op.get("azs")
-                qty = op.get("quantity")
-                if card and azs and qty:
-                    exists2 = db.query(FuelOperation).filter(
-                        FuelOperation.source == "api",
-                        FuelOperation.api_data.contains({"cardNumber": card})  # если JSONB
-                    ).first()
-                    if exists2:
-                        continue
-
-                # сохраняем
+                # 3. Создаем операцию
                 new_op = FuelOperation(
                     source="api",
-                    api_data=op.get("raw"),
-                    imported_at=datetime.now(timezone.utc),
-                    status="loaded"
+                    api_data=op_data.get("raw"),
+                    date_time=dt_obj,
+                    doc_number=doc,
+                    status="awaiting_user_confirmation",
+                    car_from_api=op_data.get("car_num")
                 )
-                if hasattr(FuelOperation, "doc_number") and doc:
-                    setattr(new_op, "doc_number", doc)
-                if hasattr(FuelOperation, "date_time") and dt_obj:
-                    setattr(new_op, "date_time", dt_obj)
+
+                # 4. Логика поиска предполагаемого пользователя
+                found_user = None
+                card_num = op_data.get("card_number")
+                car_num = op_data.get("car_num")
+
+                # Поиск по карте
+                if card_num:
+                    card_obj = db.query(FuelCard).filter_by(card_number=card_num).first()
+                    if card_obj: found_user = db.query(User).filter_by(id=card_obj.user_id).first()
+
+                # Поиск по госномеру авто (если по карте не нашли)
+                if not found_user and car_num:
+                    car_obj = db.query(Car).filter_by(plate=car_num).first()
+                    if car_obj and car_obj.owners:
+                        found_user = db.query(User).filter_by(id=car_obj.owners[0]).first()
+
+                if found_user:
+                    new_op.presumed_user_id = found_user.id
+
                 db.add(new_op)
+                db.flush()  # Получаем ID
+
+                # 5. Сразу отправляем в Telegram
+                if found_user and found_user.telegram_id:
+                    await send_operation_to_user(found_user.telegram_id, new_op.id)
+
                 new_count += 1
+
+            # Обновляем время запуска
+            sched = db.query(Schedule).filter_by(name=schedule_name).first()
+            if sched: sched.last_run = now_utc
             db.commit()
 
-        log.info("Import job %s: new operations saved: %d", schedule_name, new_count)
-
-        # обновляем last_run в schedules
-        with get_db_session() as db:
-            sched = db.query(Schedule).filter_by(name=schedule_name).first()
-            if sched:
-                sched.last_run = datetime.now(timezone.utc)
-                db.commit()
-
-    except SQLAlchemyError as e:
-        log.exception("DB error in import job %s: %s", schedule_name, e)
+        log.info(f"Job {schedule_name} finished. New ops: {new_count}")
     except Exception as e:
-        log.exception("Unexpected error in import job %s: %s", schedule_name, e)
+        log.exception(f"Error in job {schedule_name}: {e}")

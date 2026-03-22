@@ -1,37 +1,39 @@
-# src/app/bot_handlers.py
 import os
+import logging
 from pathlib import Path
-
-from aiogram import types, Dispatcher
-from aiogram.types import (
-    InputFile, InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton
-)
-from aiogram.filters import Command
+from datetime import datetime, timezone, timedelta
 from io import StringIO, BytesIO
 import csv
-from datetime import datetime, timezone, timedelta
-import logging
-from sqlalchemy import cast, String
+
+from aiogram import types, Dispatcher, F
+from aiogram.types import (
+    InputFile, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, BufferedInputFile
+)
+from aiogram.filters import Command
+from sqlalchemy import cast, String, or_
 from openpyxl import Workbook, load_workbook
+
+from src.app.belorusneft_api import fetch_operational_raw, parse_operations
 from src.app.config import TOKEN_SALT, CODE_TTL_HOURS
 from src.app.tokens import verify_and_consume_code, generate_code, hash_code
 from src.app.models import (
     LinkToken, User, FuelOperation, Schedule,
-    FuelCard, Car, ConfirmationHistory
+    FuelCard, Car, ConfirmationHistory, UserState # Добавлен UserState
 )
-from aiogram import F
-from src.app.belorusneft_api import fetch_operational_raw, parse_operations
 from src.app.db import get_db_session
 from src.app.permissions import require_permission, user_has_permission
 from sqlalchemy.exc import IntegrityError
 
+logger = logging.getLogger(__name__)
+
+# Путь для сохранения Excel в корне проекта
+EXPORT_DIR = Path(__file__).parent.parent.parent / "exports"
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+
 # В памяти: состояние подтверждений от пользователей
 # telegram_id -> {"op_id": int, "step": "ask_car"|"ask_person", "attempts": int}
 PENDING_OP_CONFIRM = {}
-# Путь для сохранения Excel
-EXPORT_DIR = Path(os.path.dirname(__file__)) / "exports"
-EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Вспомогательные функции ---
 def extract_args(message: types.Message) -> str:
@@ -39,48 +41,135 @@ def extract_args(message: types.Message) -> str:
     parts = text.split(maxsplit=1)
     return parts[1].strip() if len(parts) > 1 else ""
 
-async def send_operation_to_user(tg_id: int, op_id: int):
-    """
-    Отправить пользователю запрос подтверждения операции.
-    Сформировать текст из api_data и прислать кнопки Да / Нет.
-    """
+
+# --- Обработчики процесса подтверждения ---
+
+async def callback_user_yes(call: types.CallbackQuery):
+    """Обработка кнопки 'Да, это я'"""
+    op_id = int(call.data.split(":")[1])
+    with get_db_session() as db:
+        user = db.query(User).filter_by(telegram_id=call.from_user.id).first()
+        op = db.query(FuelOperation).filter_by(id=op_id).first()
+
+        # Если в данных API уже есть госномер, заправка подтверждается сразу
+        if op.car_from_api:
+            op.status = "confirmed"
+            op.confirmed_user_id = user.id
+            op.confirmed_at = datetime.now(timezone.utc)
+            db.commit()
+            await call.message.edit_text(call.message.text + "\n\n✅ Подтверждено автоматически.")
+            export_to_excel_final(op.id)
+        else:
+            # Если госномера нет, переходим в состояние ожидания ввода госномера
+            db.merge(UserState(telegram_id=call.from_user.id, operation_id=op_id, step="ask_car"))
+            db.commit()
+            await call.message.answer("На каком автомобиле была заправка? Введите госномер (например, 1234 AB-7):")
+    await call.answer()
+
+
+async def callback_user_no(call: types.CallbackQuery):
+    """Обработка кнопки 'Нет, не я' (Логика Пинг-понга)"""
+    op_id = int(call.data.split(":")[1])
+    with get_db_session() as db:
+        user = db.query(User).filter_by(telegram_id=call.from_user.id).first()
+        # Ищем, кто прислал этот запрос (для возврата)
+        hist = db.query(ConfirmationHistory).filter_by(operation_id=op_id, to_user_id=user.id).order_by(
+            ConfirmationHistory.id.desc()).first()
+
+        if hist and hist.from_user_id:
+            # Если задачу переслал другой юзер, возвращаем её ему
+            prev_user = db.query(User).filter_by(id=hist.from_user_id).first()
+            if prev_user and prev_user.telegram_id:
+                await call.message.edit_text("❌ Задача возвращена инициатору.")
+                await call.bot.send_message(
+                    prev_user.telegram_id,
+                    f"⚠️ Пользователь {user.full_name} отклонил заправку (ID {op_id}). Укажите верного заправщика (ФИО или госномер):"
+                )
+                db.merge(UserState(telegram_id=prev_user.telegram_id, operation_id=op_id, step="ask_person"))
+        else:
+            # Если это первый круг, просим текущего юзера указать, кто заправлялся
+            db.merge(UserState(telegram_id=call.from_user.id, operation_id=op_id, step="ask_person"))
+            await call.message.edit_text("❌ Укажите, кто заправлялся (ФИО или госномер):")
+
+        db.commit()
+    await call.answer()
+
+
+async def handle_user_text(message: types.Message):
+    """Обработка текстовых ответов на основе состояний (UserState)"""
+    with get_db_session() as db:
+        st = db.query(UserState).filter_by(telegram_id=message.from_user.id).first()
+        if not st:
+            return  # Если это просто текст, игнорируем
+
+        op = db.query(FuelOperation).filter_by(id=st.operation_id).first()
+        user = db.query(User).filter_by(telegram_id=message.from_user.id).first()
+        text = message.text.strip()
+
+        if st.step == "ask_car":
+            op.actual_car = text.upper()
+            op.status = "confirmed"
+            op.confirmed_user_id = user.id
+            op.confirmed_at = datetime.now(timezone.utc)
+            db.delete(st)
+            db.commit()
+            await message.reply(f"✅ Госномер {text.upper()} сохранен. Заправка подтверждена.")
+            export_to_excel_final(op.id)
+
+        elif st.step == "ask_person":
+            # Ищем человека по ФИО или госномерам его машин
+            found = db.query(User).filter(User.full_name.ilike(f"%{text}%")).first()
+            if not found:
+                car = db.query(Car).filter(Car.plate.ilike(f"%{text}%")).first()
+                if car and car.owners:
+                    found = db.query(User).filter_by(id=car.owners[0]).first()
+
+            if found and found.telegram_id:
+                db.delete(st)
+                db.commit()
+                # Пересылаем операцию новому кандидату
+                await send_operation_to_user(found.telegram_id, op.id, from_user_id=user.id)
+                await message.reply(f"🚀 Запрос перенаправлен пользователю {found.full_name}.")
+            else:
+                await message.reply("Пользователь не найден. Попробуйте уточнить ФИО или введите госномер автомобиля:")
+
+
+async def send_operation_to_user(tg_id: int, op_id: int, from_user_id: int = None):
+    """Отправка запроса пользователю с полными данными из ТЗ"""
     with get_db_session() as db:
         op = db.query(FuelOperation).filter_by(id=op_id).first()
-        if not op:
-            return
+        target_user = db.query(User).filter_by(telegram_id=tg_id).first()
+        if not op or not target_user: return
 
         api = op.api_data or {}
-        dt = getattr(op, "date_time", None) or api.get("dateTimeIssue") or api.get("date_time")
-        card = api.get("cardNumber") or api.get("card_number") or api.get("card") or "—"
-        azs = api.get("azsNumber") or api.get("azs") or "—"
-        qty = api.get("productQuantity") or api.get("quantity") or "—"
-        doc = getattr(op, "doc_number", None) or api.get("docNumber") or api.get("doc_number") or "—"
+        fuel = api.get("productName") or "—"
+        qty = api.get("productQuantity") or "0"
+        azs = api.get("azsNumber") or "—"
+        dt = op.date_time.strftime("%d.%m.%Y %H:%M") if op.date_time else "—"
 
         text = (
-            "Пожалуйста, подтвердите заправку:\n"
-            f"Дата: {dt}\n"
-            f"Карта: {card}\n"
-            f"АЗС: {azs}\n"
-            f"Чек: {doc}\n"
-            f"Кол-во: {qty} л\n\n"
-            "Это вы заправлялись?"
+            f"⛽️ *Подтвердите заправку*\n"
+            f"📅 Дата: {dt}\n"
+            f"⛽ Топливо: {fuel} ({qty} л.)\n"
+            f"📍 АЗС: {azs}\n"
+            f"💳 Карта: {api.get('cardNumber', '—')}\n"
+            f"🧾 Чек: {op.doc_number or '—'}\n\n"
+            f"Это ваша заправка?"
         )
 
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="Да, это я", callback_data=f"user_yes:{op_id}")],
-            [InlineKeyboardButton(text="Нет, не я", callback_data=f"user_no:{op_id}")],
+            [InlineKeyboardButton(text="✅ Да, это я", callback_data=f"user_yes:{op_id}")],
+            [InlineKeyboardButton(text="❌ Нет, не я", callback_data=f"user_no:{op_id}")]
         ])
 
-    # отправляем вне сессии
-    try:
-        await types.Bot.get_current().send_message(tg_id, text, reply_markup=kb)
-    except Exception:
-        # если не удалось отправить — логируем, но не ломаем процесс
-        logging.getLogger(__name__).exception("Failed to send confirmation to user %s for op %s", tg_id, op_id)
-
+        # Фиксируем в истории, кому отправили
+        db.add(ConfirmationHistory(operation_id=op_id, from_user_id=from_user_id, to_user_id=target_user.id, stage_result="sent"))
+        db.commit()
+        await types.Bot.get_current().send_message(tg_id, text, reply_markup=kb, parse_mode="Markdown")
 
 # in-memory plain codes (shown once)
 PENDING_PLAINS = {}  # token_id -> (plain_code, expires_at)
+
 
 # --- User handlers ---
 async def cmd_start(message: types.Message):
@@ -94,7 +183,8 @@ async def cmd_start(message: types.Message):
             [KeyboardButton(text="📥 Обновить импорт"), KeyboardButton(text="🔎 Тестовый импорт")],
             [KeyboardButton(text="🗓 Расписания"), KeyboardButton(text="➕ Установить расписание")],
             [KeyboardButton(text="🗑 Удалить расписание"), KeyboardButton(text="👥 Пользователи")],
-            [KeyboardButton(text="🔐 Сгенерировать код"), KeyboardButton(text="📤 Экспорт кодов")]
+            [KeyboardButton(text="🔐 Сгенерировать код"), KeyboardButton(text="📤 Экспорт кодов")],
+            [KeyboardButton(text="📊 Экспорт в Excel")]
         ],
         resize_keyboard=True
     )
@@ -384,130 +474,67 @@ async def cmd_export_codes(message: types.Message):
 
 
 # --- Callbacks for user list / tokens ---
-async def callback_user_yes(call: types.CallbackQuery):
-    """
-    Пользователь подтвердил, но возможно нужно уточнить автомобиль.
-    """
-    try:
-        op_id = int(call.data.split(":", 1)[1])
-    except Exception:
-        await call.answer("Неверный идентификатор операции.", show_alert=True)
-        return
-
+def export_to_excel_final(op_id: int):
+    """Создает запись в Excel по 23 колонкам из ТЗ"""
+    file_path = EXPORT_DIR / "Fuel_Report_Master.xlsx"
     with get_db_session() as db:
         op = db.query(FuelOperation).filter_by(id=op_id).first()
-        if not op:
-            await call.answer("Операция не найдена.", show_alert=True)
-            return
+        if not op: return
+        api = op.api_data or {}
+        presumed = db.query(User).filter_by(id=op.presumed_user_id).first()
+        confirmed = db.query(User).filter_by(id=op.confirmed_user_id).first()
 
-        # если уже есть автомобиль — подтверждаем и экспортируем
-        if getattr(op, "car_from_api", None):
-            op.status = "confirmed"
-            op.confirmed_at = datetime.now(timezone.utc)
-            db.commit()
-            await call.message.answer("Спасибо! Заправка подтверждена.")
-            # экспорт в Excel
-            try:
-                export_operation_to_excel(op.id)
-            except Exception:
-                logging.getLogger(__name__).exception("Failed to export op %s to Excel", op.id)
-            await call.answer()
-            return
-
-        # иначе — просим ввести госномер
-        PENDING_OP_CONFIRM[call.from_user.id] = {"op_id": op_id, "step": "ask_car", "attempts": 0}
-        await call.message.answer("На каком автомобиле была заправка? Введите госномер (например, AB1234CD).")
-        await call.answer()
-
-async def handle_user_text(message: types.Message):
-    """
-    Обработчик текстовых ответов от пользователей, ожидающих уточнений.
-    Ожидаемые шаги: ask_car, ask_person.
-    """
-    entry = PENDING_OP_CONFIRM.get(message.from_user.id)
-    if not entry:
-        return  # не ожидаем от этого пользователя ввода
-
-    op_id = entry["op_id"]
-    step = entry["step"]
-    text = (message.text or "").strip()
-    entry["attempts"] = entry.get("attempts", 0) + 1
-
-    with get_db_session() as db:
-        op = db.query(FuelOperation).filter_by(id=op_id).first()
-        if not op:
-            await message.reply("Операция не найдена. Попробуйте позже.")
-            PENDING_OP_CONFIRM.pop(message.from_user.id, None)
-            return
-
-        if step == "ask_car":
-            # нормализуем госномер
-            plate = text.upper().replace(" ", "")
-            # создаём/находим Car
-            car = db.query(Car).filter_by(plate=plate).first()
-            if not car:
-                car = Car(plate=plate)
-                db.add(car)
-                db.flush()
-            # привязываем к операции и пользователю
-            op.car_from_api = plate
-            op.status = "confirmed"
-            op.confirmed_at = datetime.now(timezone.utc)
-            # привяжем владельца если есть presumed_user
-            if op.presumed_user_id:
-                owners = car.owners or []
-                if op.presumed_user_id not in owners:
-                    owners.append(op.presumed_user_id)
-                    car.owners = owners
-            db.commit()
-            await message.reply(f"Спасибо, автомобиль {plate} сохранён и заправка подтверждена.")
-            # экспорт в Excel
-            try:
-                export_operation_to_excel(op.id)
-            except Exception:
-                logging.getLogger(__name__).exception("Failed to export op %s to Excel", op.id)
-            PENDING_OP_CONFIRM.pop(message.from_user.id, None)
-            return
-
-        if step == "ask_person":
-            # попытка найти пользователя по имени или по госномеру
-            # сначала по госномеру
-            plate = text.upper().replace(" ", "")
-            user_found = None
-            if len(plate) >= 4 and any(ch.isdigit() for ch in plate):
-                car = db.query(Car).filter_by(plate=plate).first()
-                if car and car.owners:
-                    # возьмём первого владельца
-                    uid = car.owners[0]
-                    user_found = db.query(User).filter_by(id=uid).first()
-
-            # если не найдено по номеру — ищем по имени
-            if not user_found:
-                q = f"%{text}%"
-                user_found = db.query(User).filter(User.full_name.ilike(q)).first()
-
-            if user_found:
-                # назначаем операцию этому пользователю и отправляем ему запрос
-                op.presumed_user_id = user_found.id
-                db.commit()
-                try:
-                    await send_operation_to_user(user_found.telegram_id, op.id)
-                except Exception:
-                    logging.getLogger(__name__).exception("Failed to notify found user %s for op %s", user_found.id, op.id)
-                await message.reply(f"Спасибо — я отправил запрос пользователю {user_found.full_name}.")
-                PENDING_OP_CONFIRM.pop(message.from_user.id, None)
-                return
+        row = [
+            op.id, "Топливная карта" if op.source == "api" else "Личные средства",
+            op.source, op.date_time.strftime("%d.%m.%Y") if op.date_time else "",
+            op.date_time.strftime("%H:%M:%S") if op.date_time else "",
+            api.get("cardNumber") or "—", api.get("productName") or "—",
+            api.get("productQuantity") or 0, api.get("productCost") or 0,
+            api.get("azsNumber") or "—", op.doc_number or "—",
+            op.car_from_api or "—", api.get("driverName") or "—", "",
+            presumed.full_name if presumed else "—", confirmed.full_name if confirmed else "—",
+            op.actual_car or op.car_from_api or "—", "Система",
+            confirmed.full_name if confirmed else "—", op.status,
+            op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—",
+            "", "Да" if op.status == "confirmed" else "Нет"
+        ]
+        try:
+            if not file_path.exists():
+                wb = Workbook()
+                ws = wb.active
+                ws.append(["ID", "Тип", "Источник", "Дата", "Время", "Карта", "Топливо", "Литры", "Сумма", "АЗС", "Чек",
+                           "Авто(API)", "Водитель(API)", "OCR", "Предполагаемый", "Фактический", "Факт.Авто",
+                           "Инициатор", "Подтвердил", "Статус", "Дата Подтв", "Прим", "Готов"])
             else:
-                # если не нашли — повторяем попытку или завершаем
-                if entry["attempts"] >= 3:
-                    await message.reply("Не удалось найти пользователя. Операция помечена для ручной обработки.")
-                    op.status = "manual_review"
-                    db.commit()
-                    PENDING_OP_CONFIRM.pop(message.from_user.id, None)
-                    return
-                else:
-                    await message.reply("Не удалось найти. Введите полное имя или госномер автомобиля ещё раз.")
-                    return
+                wb = load_workbook(file_path)
+                ws = wb.active
+            ws.append(row)
+            wb.save(file_path)
+            op.exported_to_excel = True
+            db.commit()
+        except Exception as e:
+            logger.error(f"Excel error: {e}")
+
+
+async def send_operation_to_user(tg_id: int, op_id: int, from_user_id: int = None):
+    """Отправка сообщения с кнопками Да/Нет"""
+    with get_db_session() as db:
+        op = db.query(FuelOperation).filter_by(id=op_id).first()
+        if not op: return
+        api = op.api_data or {}
+        text = (f"⛽️ *Подтвердите заправку*\n\nДата: {op.date_time}\nТопливо: {api.get('productName')}\n"
+                f"Литры: {api.get('productQuantity')}\nЧек: {op.doc_number}\n\nЭто вы заправлялись?")
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да", callback_data=f"user_yes:{op_id}"),
+             InlineKeyboardButton(text="❌ Нет", callback_data=f"user_no:{op_id}")]
+        ])
+        db.add(ConfirmationHistory(operation_id=op_id, from_user_id=from_user_id,
+                                   to_user_id=db.query(User).filter_by(telegram_id=tg_id).first().id,
+                                   stage_result="sent"))
+        db.commit()
+        await types.Bot.get_current().send_message(tg_id, text, reply_markup=kb, parse_mode="Markdown")
+
+
 
 def export_operation_to_excel(op_id: int):
     """
@@ -555,21 +582,42 @@ def export_operation_to_excel(op_id: int):
         op.exported_to_excel = True
         db.commit()
 
-async def callback_user_no(call: types.CallbackQuery):
-    """
-    Пользователь ответил, что это не он. Запускаем сценарий поиска фактического заправщика.
-    """
-    try:
-        op_id = int(call.data.split(":", 1)[1])
-    except Exception:
-        await call.answer("Неверный идентификатор операции.", show_alert=True)
-        return
 
-    # помечаем операцию как awaiting_assignment и просим ввести имя
-    PENDING_OP_CONFIRM[call.from_user.id] = {"op_id": op_id, "step": "ask_person", "attempts": 0}
-    await call.message.answer("Кто заправлялся? Введите имя или фамилию (или госномер автомобиля, если знаете).")
-    await call.answer()
 
+
+
+def export_to_excel_final(op_id: int):
+    """Экспорт согласно Приложению 1 (23 колонки)"""
+    file_path = EXPORT_DIR / "Fuel_Report_Master.xlsx"
+    with get_db_session() as db:
+        op = db.query(FuelOperation).filter_by(id=op_id).first()
+        api = op.api_data or {}
+
+        # Подготовка данных (23 колонки по ТЗ)
+        row = [
+            op.id, "Топливная карта", "API",
+            op.date_time.date() if op.date_time else "",
+            op.date_time.time() if op.date_time else "",
+            api.get("cardNumber"), api.get("productName"), api.get("productQuantity"),
+            api.get("productCost"), api.get("azsNumber"), op.doc_number,
+            op.car_from_api, api.get("driverName"), "",  # OCR пустой
+            "Предполагаемый", "Фактический", op.actual_car, "Система",
+            "Кто подтвердил", op.status, datetime.now().strftime("%d.%m.%Y"), "", "Да"
+        ]
+
+        if not file_path.exists():
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Заправки по картам"
+            ws.append(["ID", "Тип", "Источник", "Дата", "Время", "Карта", "Топливо", "Кол-во", "Сумма", "АЗС", "Чек",
+                       "Авто(API)", "Водитель(API)", "OCR", "Предполагаемый", "Фактический", "Факт.Авто", "Инициатор",
+                       "Подтвердил", "Статус", "Дата подтв", "Прим", "Готовность"])
+        else:
+            wb = load_workbook(file_path)
+            ws = wb["Заправки по картам"]
+
+        ws.append(row)
+        wb.save(file_path)
 async def callback_users_page(call: types.CallbackQuery):
     page = int(call.data.split(":", 1)[1])
     await call.message.delete()
@@ -713,6 +761,7 @@ async def cmd_run_import_now_dry(message: types.Message):
 
 @require_permission("admin:manage")
 async def cmd_run_import_now(message: types.Message):
+    new_count = 0
     date = datetime.now() - timedelta(days=1)
     try:
         raw = fetch_operational_raw(date)
@@ -733,7 +782,7 @@ async def cmd_run_import_now(message: types.Message):
             await message.reply("В ответе найдено элементов: 0 (импорт временно отключён)")
             return
 
-        new_count = 0
+
         with get_db_session() as db:
             for op in ops:
                 # parse date
@@ -1091,6 +1140,63 @@ async def btn_export_codes(message: types.Message):
     await cmd_export_codes(message)
 
 
+@require_permission("admin:manage")
+async def btn_export_excel(message: types.Message):
+    """Генерация и отправка файла Excel со всеми заправками"""
+    await message.answer("⏳ Собираю данные для отчета, подождите...")
+
+    with get_db_session() as db:
+        operations = db.query(FuelOperation).order_by(FuelOperation.date_time.desc()).all()
+
+        if not operations:
+            await message.answer("Нет данных для экспорта.")
+            return
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Заправки"
+
+        # Заголовки (согласно вашему ТЗ)
+        headers = [
+            "ID", "Дата", "Время", "Источник", "Статус",
+            "Карта", "Топливо", "Объем (л)", "Стоимость",
+            "АЗС", "Госномер (из API)", "Водитель (из API)",
+            "Фактический Госномер", "Подтвердил (ФИО)"
+        ]
+        ws.append(headers)
+
+        for op in operations:
+            api = op.api_data or {}
+            # Собираем строку данных
+            ws.append([
+                op.id,
+                op.date_time.strftime('%d.%m.%Y') if op.date_time else "—",
+                op.date_time.strftime('%H:%M') if op.date_time else "—",
+                op.source,
+                op.status,
+                api.get('cardNumber', '—'),
+                api.get('productName', '—'),
+                api.get('productQuantity', 0),
+                api.get('productCost', 0),
+                api.get('azsNumber', '—'),
+                api.get('carNum', '—'),
+                api.get('driverName', '—'),
+                op.actual_car or "—",
+                op.confirmed_user.full_name if op.confirmed_user else "—"
+            ])
+
+        # Сохраняем в буфер, чтобы не мусорить файлами на диске
+        file_buffer = BytesIO()
+        wb.save(file_buffer)
+        file_buffer.seek(0)
+
+        filename = f"Fuel_Report_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx"
+
+        await message.answer_document(
+            types.BufferedInputFile(file_buffer.read(), filename=filename),
+            caption=f"📊 Выгрузка заправок на {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        )
+
 # --- Register handlers ---
 def register_handlers(dp: Dispatcher):
     # commands
@@ -1124,12 +1230,12 @@ def register_handlers(dp: Dispatcher):
     dp.callback_query.register(callback_send_code, lambda c: c.data and c.data.startswith("send_code:"))
     dp.callback_query.register(callback_revoke_code, lambda c: c.data and c.data.startswith("revoke_code:"))
     dp.callback_query.register(lambda c: c.answer(), lambda c: c.data == "noop")
-
+    dp.message.register(btn_export_excel, F.text == "📊 Экспорт в Excel")  # Регистрация кнопки
     # Пример регистрации в основном модуле, где есть Dispatcher dp
     dp.callback_query.register(callback_user_yes, F.data.startswith("user_yes:"))
     dp.callback_query.register(callback_user_no, F.data.startswith("user_no:"))
     dp.message.register(handle_user_text, F.text)
-
+    dp.message.register(handle_user_text, F.text & ~F.text.startswith("/"))
     # admin callbacks for imported operations
     dp.callback_query.register(callback_confirm_op, lambda c: c.data and c.data.startswith("confirm_op:"))
     dp.callback_query.register(callback_assign_op, lambda c: c.data and c.data.startswith("assign_op:"))
