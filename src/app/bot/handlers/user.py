@@ -1,21 +1,38 @@
-from aiogram import types
-from aiogram.filters import Command
+import os
+import logging
+from datetime import datetime, timezone
+from aiogram import types, F
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
 from src.app.db import get_db_session
-from src.app.models import User
+from src.app.models import User, FuelOperation, Car, ConfirmationHistory
 from src.app.permissions import user_has_permission, require_permission
 from src.app.tokens import verify_and_consume_code
+from src.ocr.engine import SmartFuelOCR
 from src.app.bot.keyboards import (
     reply_keyboard_user,
     reply_keyboard_admin,
+    get_ocr_confirm_kb,
+    get_car_selection_kb,
     BTN_USER_PROFILE,
     BTN_USER_LINK_HELP,
     BTN_USER_HELP,
     BTN_USER_HOME,
     BTN_ADMIN_HOME,
+    BTN_USER_SEND_CHECK,
 )
 from src.app.bot.utils import extract_args
 
+
+class ReceiptStates(StatesGroup):
+    waiting_for_photo = State()
+    waiting_for_confirmation = State()
+    waiting_for_car = State()
+
+
+logger = logging.getLogger("bot.user")
 
 USER_HELP_TEXT = (
     "ℹ️ *Что умеет бот*\n\n"
@@ -116,6 +133,136 @@ async def cmd_link_help(message: types.Message):
     )
 
 
+async def btn_send_receipt_start(message: types.Message, state: FSMContext):
+    """Начало сценария: запрос фото чека (ТЗ 8.2)"""
+    # Проверка, привязан ли пользователь
+    with get_db_session() as db:
+        user = db.query(User).filter(User.telegram_id == message.from_user.id).first()
+        if not user:
+            await message.reply("Сначала привяжите аккаунт через /link <код>.")
+            return
+
+    await state.set_state(ReceiptStates.waiting_for_photo)
+    await message.answer("📸 Пожалуйста, отправьте фотографию чека АЗС.")
+
+
+async def handle_receipt_photo(message: types.Message, state: FSMContext):
+    """Прием фото и запуск OCR пайплайна"""
+    if not message.photo:
+        await message.answer("Пожалуйста, отправьте изображение (фото).")
+        return
+
+    photo = message.photo[-1]
+    file_info = await message.bot.get_file(photo.file_id)
+
+    # Создаем временную директорию
+    os.makedirs("temp_ocr", exist_ok=True)
+    file_path = f"temp_ocr/{photo.file_id}.jpg"
+    await message.bot.download_file(file_info.file_path, file_path)
+
+    msg_wait = await message.answer("⏳ Распознаю данные чека (это может занять до 10 сек)...")
+
+    try:
+        with get_db_session() as db:
+            processor = SmartFuelOCR(db)
+            ocr_result = processor.run_pipeline(file_path, telegram_user_id=message.from_user.id)
+
+        if not ocr_result:
+            await message.answer("❌ Не удалось распознать чек. Попробуйте сделать фото четче.")
+            await state.clear()
+            return
+
+        if isinstance(ocr_result, dict) and ocr_result.get("status") == "duplicate":
+            await message.answer(f"⚠️ {ocr_result.get('message')}")
+            await state.clear()
+            return
+
+        # Успех: сохраняем ID операции в FSM
+        op_id = ocr_result.get('id')
+        await state.update_data(op_id=op_id)
+
+        text = (
+            f"📋 *Данные чека распознаны:*\n\n"
+            f"⛽ Топливо: {ocr_result.get('fuel_type', '—')}\n"
+            f"💧 Кол-во: {ocr_result.get('quantity', '0')} л.\n"
+            f"💰 Сумма: {ocr_result.get('total_sum', '0')} руб.\n"
+            f"📅 Дата: {ocr_result.get('date')} {ocr_result.get('time')}\n\n"
+            f"Все верно?"
+        )
+
+        await state.set_state(ReceiptStates.waiting_for_confirmation)
+        await message.answer(text, reply_markup=get_ocr_confirm_kb(op_id), parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"OCR Error: {e}")
+        await message.answer("❌ Произошла ошибка при обработке чека.")
+        await state.clear()
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        await msg_wait.delete()
+
+
+async def callback_ocr_confirm(call: types.CallbackQuery, state: FSMContext):
+    """Данные верны -> Переход к выбору авто (ТЗ 9.6)"""
+    data = await state.get_data()
+    op_id = data.get("op_id")
+
+    with get_db_session() as db:
+        user = db.query(User).filter(User.telegram_id == call.from_user.id).first()
+        if not user or not user.cars:
+            await call.message.answer("У вас в профиле нет привязанных авто. Обратитесь к админу.")
+            await state.clear()
+            return
+
+        cars_list = db.query(Car).filter(Car.plate.in_(user.cars)).all()
+
+    await state.set_state(ReceiptStates.waiting_for_car)
+    await call.message.edit_text("🚗 Выберите автомобиль:", reply_markup=get_car_selection_kb(cars_list))
+    await call.answer()
+
+
+async def callback_select_car(call: types.CallbackQuery, state: FSMContext):
+    """Финальный этап: сохранение авто и закрытие операции"""
+    car_id = int(call.data.split("_")[-1])
+    data = await state.get_data()
+    op_id = data.get("op_id")
+
+    with get_db_session() as db:
+        op = db.query(FuelOperation).get(op_id)
+        car = db.query(Car).get(car_id)
+        user = db.query(User).filter(User.telegram_id == call.from_user.id).first()
+
+        if op and car:
+            op.actual_car = car.plate
+            op.confirmed_user_id = user.id
+            op.status = "confirmed"
+            op.confirmed_at = datetime.now(timezone.utc)
+
+            # Запись в историю для аудита
+            history = ConfirmationHistory(
+                operation_id=op.id,
+                from_user_id=user.id,
+                to_user_id=user.id,
+                answer="confirmed",
+                stage_result=f"Подтверждено пользователем для авто {car.plate}"
+            )
+            db.add(history)
+            db.commit()
+            await call.message.edit_text(f"✅ Заправка авто {car.plate} успешно зарегистрирована!")
+        else:
+            await call.message.edit_text("❌ Ошибка: операция не найдена.")
+
+    await state.clear()
+    await call.answer()
+
+
+async def callback_ocr_cancel(call: types.CallbackQuery, state: FSMContext):
+    await call.message.edit_text("❌ Регистрация чека отменена.")
+    await state.clear()
+    await call.answer()
+
+
 async def btn_user_profile(message: types.Message):
     await cmd_myprofile(message)
 
@@ -134,8 +281,13 @@ def register_user_handlers(dp):
     dp.message.register(cmd_link, Command(commands=["link"]))
     dp.message.register(cmd_myprofile, Command(commands=["myprofile"]))
     dp.message.register(cmd_user_help, Command(commands=["help"]))
-    dp.message.register(btn_user_profile, lambda m: m.text == BTN_USER_PROFILE)
-    dp.message.register(cmd_link_help, lambda m: m.text == BTN_USER_LINK_HELP)
-    dp.message.register(cmd_user_help, lambda m: m.text == BTN_USER_HELP)
-    dp.message.register(btn_user_home, lambda m: m.text == BTN_USER_HOME)
-    dp.message.register(btn_admin_home, lambda m: m.text == BTN_ADMIN_HOME)
+    dp.message.register(btn_user_profile, F.text == BTN_USER_PROFILE)
+    dp.message.register(cmd_link_help, F.text == BTN_USER_LINK_HELP)
+    dp.message.register(cmd_user_help, F.text == BTN_USER_HELP)
+    dp.message.register(btn_user_home, F.text == BTN_USER_HOME)
+    dp.message.register(btn_admin_home, F.text == BTN_ADMIN_HOME)
+    dp.message.register(btn_send_receipt_start, F.text == BTN_USER_SEND_CHECK)
+    dp.message.register(handle_receipt_photo, ReceiptStates.waiting_for_photo, F.photo)
+    dp.callback_query.register(callback_ocr_confirm, F.data.startswith("ocr_confirm_"))
+    dp.callback_query.register(callback_ocr_cancel, F.data.startswith("ocr_cancel_"))
+    dp.callback_query.register(callback_select_car, F.data.startswith("select_car_"))

@@ -1,9 +1,11 @@
 """Тексты reply-кнопок и сборка клавиатур (единое место, без расхождений с регистрацией)."""
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- Пользователь ---
 BTN_USER_PROFILE = "👤 Мой профиль"
 BTN_USER_LINK_HELP = "🔑 Как привязать аккаунт"
+BTN_USER_SEND_CHECK = "📸 Отправить чек"
 BTN_USER_HELP = "❓ Помощь"
 BTN_USER_HOME = "🏠 Главное меню"
 
@@ -44,3 +46,34 @@ def reply_keyboard_admin() -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
     )
+
+
+def get_ocr_confirm_kb(op_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения данных OCR"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"ocr_confirm_{op_id}"),
+        InlineKeyboardButton(text="✏️ Исправить", callback_data=f"ocr_edit_{op_id}"),
+        InlineKeyboardButton(text="❌ Отменить", callback_data=f"ocr_cancel_{op_id}")
+    )
+
+    return builder.as_markup()
+
+
+def get_car_selection_kb(cars: list) -> InlineKeyboardMarkup:
+    """Выбор автомобиля из списка"""
+    builder = InlineKeyboardBuilder()
+    for car in cars:
+        # car может быть объектом модели с полями id и gov_number
+        builder.row(InlineKeyboardButton(text=f"🚗 {car.gov_number}", callback_data=f"select_car_{car.id}"))
+    return builder.as_markup()
+
+
+def get_fuel_card_confirm_kb(op_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения заправки по картe"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✅ Да, это я", callback_data=f"fuel_card_yes_{op_id}"),
+        InlineKeyboardButton(text="❌ Нет, не я", callback_data=f"fuel_card_no_{op_id}")
+    )
+    return builder.as_markup()

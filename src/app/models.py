@@ -1,6 +1,8 @@
 # src/app/models.py
 from sqlalchemy import (
-    Column, Integer, String, Boolean, DateTime, ForeignKey, Text, JSON, Table, UniqueConstraint, Index
+    Column, Integer, String, Boolean,
+    DateTime, ForeignKey, Text, JSON,
+    Table, UniqueConstraint, Index, BigInteger
 )
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
@@ -31,7 +33,7 @@ class Role(Base):
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)  # внутренний ID
-    telegram_id = Column(Integer, unique=True, nullable=True)
+    telegram_id = Column(BigInteger, unique=True, nullable=True)
     full_name = Column(String(255), nullable=False)
     short_name = Column(String(100))
     active = Column(Boolean, default=True)
