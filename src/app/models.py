@@ -80,19 +80,6 @@ class FuelOperation(Base):
     ready_for_waybill = Column(Boolean, default=False)
     status = Column(String(50), default="new")
 
-
-class ConfirmationHistory(Base):
-    __tablename__ = "confirmation_history"
-    id = Column(Integer, primary_key=True)
-    operation_id = Column(Integer, ForeignKey("fuel_operations.id", ondelete="CASCADE"))
-    operation = relationship("FuelOperation", backref="history")
-    to_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
-    to_user = relationship("User")
-    answer = Column(String(50))  # 'yes','no','cancel'
-    answered_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    comment = Column(Text)
-    stage_result = Column(String(100))
-
 class LinkToken(Base):
     __tablename__ = "link_tokens"
 
@@ -124,3 +111,28 @@ class Schedule(Base):
     last_run = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+# Добавьте новый класс UserState в models.py
+class UserState(Base):
+    __tablename__ = "user_states"
+    telegram_id = Column(Integer, primary_key=True)
+    operation_id = Column(Integer, ForeignKey("fuel_operations.id", ondelete="CASCADE"))
+    step = Column(String(50))
+    attempts = Column(Integer, default=0)
+
+
+# В классе ConfirmationHistory добавьте поле from_user_id
+class ConfirmationHistory(Base):
+    __tablename__ = "confirmation_history"
+    id = Column(Integer, primary_key=True)
+    operation_id = Column(Integer, ForeignKey("fuel_operations.id", ondelete="CASCADE"))
+    operation = relationship("FuelOperation", backref="history")
+
+    from_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)  # Инициатор запроса
+    to_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))  # Кому направлен
+
+    answer = Column(String(50))
+    answered_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    comment = Column(Text)
+    stage_result = Column(String(100))
