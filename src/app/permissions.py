@@ -1,6 +1,6 @@
 # src/app/permissions.py
 from functools import wraps
-from typing import Tuple, Optional
+from typing import Union
 from aiogram import types
 from src.app.db import get_db_session
 from src.app.models import User, Role, Permission, role_permissions
@@ -31,26 +31,29 @@ def user_has_permission(db, telegram_id: int, permission_name: str) -> bool:
 
 def require_permission(permission_name: str):
     """
-    Декоратор для проверки прав пользователя по telegram_id и данным в БД.
-    Использование: @require_permission("admin:manage")
+    Проверка прав для Message и CallbackQuery.
     """
     def decorator(handler):
         @wraps(handler)
-        async def wrapper(message: types.Message, *args, **kwargs):
-            user_tg_id = message.from_user.id
+        async def wrapper(event: Union[types.Message, types.CallbackQuery], *args, **kwargs):
+            user_tg_id = event.from_user.id
+
+            async def deny(text: str):
+                if isinstance(event, types.CallbackQuery):
+                    await event.answer(text, show_alert=True)
+                else:
+                    await event.reply(text)
 
             with get_db_session() as db:
                 try:
                     if not user_has_permission(db, user_tg_id, permission_name):
-                        await message.reply("У вас нет прав для выполнения этой команды.")
+                        await deny("У вас нет прав для выполнения этой команды.")
                         return
                 except Exception:
-                    # В случае ошибки при проверке прав — не давать подробностей, но логировать в консоль
-                    # (логирование можно заменить на более продвинутую систему логов)
                     print(f"Permission check error for tg_id={user_tg_id}, perm={permission_name}")
-                    await message.reply("Ошибка проверки прав. Обратитесь к администратору.")
+                    await deny("Ошибка проверки прав. Обратитесь к администратору.")
                     return
 
-            return await handler(message, *args, **kwargs)
+            return await handler(event, *args, **kwargs)
         return wrapper
     return decorator
