@@ -4,7 +4,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 from src.app.config import BOT_TOKEN
-from src.app.bot_handlers import register_handlers
+from src.app.bot import register_handlers
 from src.app.scheduler import init_scheduler, schedule_daily_import
 from src.app.db import get_db_session
 from src.app.models import Schedule
@@ -25,16 +25,20 @@ async def main():
     # Рекомендуемые команды (опционально) — добавляем команды для управления расписанием
     try:
         await bot.set_my_commands([
-            BotCommand(command="start", description="Старт / помощь"),
+            BotCommand(command="start", description="Меню и клавиатура"),
+            BotCommand(command="help", description="Помощь по боту"),
             BotCommand(command="link", description="Привязать аккаунт: /link <код>"),
-            BotCommand(command="myprofile", description="Показать профиль"),
-            BotCommand(command="users", description="Список пользователей (админ)"),
-            BotCommand(command="generate_code", description="Сгенерировать код для пользователя (админ)"),
+            BotCommand(command="myprofile", description="Профиль: карты и авто"),
+            BotCommand(command="users", description="Пользователи (админ)"),
+            BotCommand(command="pending_ops", description="Неподтверждённые операции (админ)"),
+            BotCommand(command="generate_code", description="Код привязки для user_id (админ)"),
             BotCommand(command="export_codes", description="Экспорт кодов (админ)"),
-            BotCommand(command="run_import_now", description="Запустить импорт операций (админ)"),
-            BotCommand(command="schedule_get", description="Показать расписания (админ)"),
-            BotCommand(command="schedule_set", description="Установить расписание: /schedule_set <name> <HH:MM UTC> (админ)"),
-            BotCommand(command="schedule_remove", description="Удалить расписание: /schedule_remove <name> (админ)")
+            BotCommand(command="run_import_now", description="Импорт из API (админ)"),
+            BotCommand(command="run_import_now_dry", description="Тестовый импорт (админ)"),
+            BotCommand(command="assign_op", description="Назначить операцию: /assign_op id user_id (админ)"),
+            BotCommand(command="schedule_get", description="Расписания (админ)"),
+            BotCommand(command="schedule_set", description="/schedule_set имя HH:MM UTC (админ)"),
+            BotCommand(command="schedule_remove", description="/schedule_remove имя (админ)"),
         ])
     except Exception as e:
         logger.warning("Не удалось установить команды бота: %s", e)
