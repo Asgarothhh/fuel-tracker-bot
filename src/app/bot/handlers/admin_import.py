@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from openpyxl import Workbook
 from sqlalchemy import cast, String
+from sqlalchemy.orm import joinedload  # Добавлен импорт для связи таблиц!
 
 from src.app.belorusneft_api import fetch_operational_raw, parse_operations
 from src.app.db import get_db_session
@@ -43,7 +44,7 @@ ADMIN_HELP_TEXT = (
     "/users — список, /generate_code id, /export_codes\n\n"
     "*Операции:*\n"
     "• «Неподтверждённые» — очередь.\n"
-    "/assign_op <op_id> <user_id>\n\n"
+    "/assign_op [op_id] [user_id]\n\n"  # ИСПРАВЛЕНЫ СКОБКИ ЗДЕСЬ
     "• «Экспорт в Excel» — выгрузка всех операций в файл."
 )
 
@@ -63,10 +64,15 @@ async def cmd_pending_ops(message: types.Message):
             .limit(30)
             .all()
         )
-    if not ops:
-        await message.reply("Нет операций вне статуса «confirmed».")
-        return
-    lines = [f"#{o.id} | {o.status} | чек {o.doc_number or '—'} | {o.date_time or '—'}" for o in ops[:25]]
+
+        if not ops:
+            await message.reply("Нет операций вне статуса «confirmed».")
+            return
+
+        # Формируем строки ВНУТРИ сессии
+        lines = [f"#{o.id} | {o.status} | чек {o.doc_number or '—'} | {o.date_time or '—'}" for o in ops[:25]]
+
+    # Отправляем сообщение уже снаружи
     body = "\n".join(lines)
     if len(ops) > 25:
         body += "\n…"
@@ -76,13 +82,8 @@ async def cmd_pending_ops(message: types.Message):
 @require_permission("admin:manage")
 async def btn_export_excel(message: types.Message):
     await message.answer("⏳ Формирую Excel…")
-    with get_db_session() as db:
-        operations = db.query(FuelOperation).order_by(FuelOperation.date_time.desc()).all()
 
-    if not operations:
-        await message.answer("Нет данных.")
-        return
-
+    # Подготавливаем файл
     wb = Workbook()
     ws = wb.active
     ws.title = "Заправки"
@@ -94,40 +95,52 @@ async def btn_export_excel(message: types.Message):
     ]
     ws.append(headers)
 
-    for op in operations:
-        api = op.api_data if isinstance(op.api_data, dict) else {}
-        row_inner = api.get("row") if isinstance(api.get("row"), dict) else {}
-        card_o = api.get("card") if isinstance(api.get("card"), dict) else {}
-        card = api.get("cardNumber") or card_o.get("cardNumber") or "—"
-        pname = api.get("productName") or row_inner.get("productName") or "—"
-        pq = api.get("productQuantity") or row_inner.get("productQuantity") or "—"
-        cost = api.get("productCost") or row_inner.get("productCost") or "—"
-        azs = api.get("azsNumber") or row_inner.get("azsNumber") or "—"
-        car_api = api.get("carNum") or row_inner.get("carNum") or op.car_from_api or "—"
-        drv = api.get("driverName") or row_inner.get("driverName") or "—"
-        ws.append([
-            op.id,
-            op.date_time.strftime("%d.%m.%Y") if op.date_time else "—",
-            op.date_time.strftime("%H:%M") if op.date_time else "—",
-            op.source,
-            op.status,
-            card,
-            pname,
-            pq,
-            cost,
-            azs,
-            car_api,
-            drv,
-            op.actual_car or "—",
-            op.confirmed_user.full_name if op.confirmed_user else "—",
-        ])
+    with get_db_session() as db:
+        # Используем joinedload чтобы сразу вытащить пользователя
+        operations = db.query(FuelOperation).options(joinedload(FuelOperation.confirmed_user)).order_by(
+            FuelOperation.date_time.desc()).all()
 
+        if not operations:
+            await message.answer("Нет данных.")
+            return
+
+        # Перебираем операции ВНУТРИ сессии БД
+        for op in operations:
+            api = op.api_data if isinstance(op.api_data, dict) else {}
+            row_inner = api.get("row") if isinstance(api.get("row"), dict) else {}
+            card_o = api.get("card") if isinstance(api.get("card"), dict) else {}
+
+            card = api.get("cardNumber") or card_o.get("cardNumber") or "—"
+            pname = api.get("productName") or row_inner.get("productName") or "—"
+            pq = api.get("productQuantity") or row_inner.get("productQuantity") or "—"
+            cost = api.get("productCost") or row_inner.get("productCost") or "—"
+            azs = api.get("azsNumber") or row_inner.get("azsNumber") or "—"
+            car_api = api.get("carNum") or row_inner.get("carNum") or op.car_from_api or "—"
+            drv = api.get("driverName") or row_inner.get("driverName") or "—"
+
+            ws.append([
+                op.id,
+                op.date_time.strftime("%d.%m.%Y") if op.date_time else "—",
+                op.date_time.strftime("%H:%M") if op.date_time else "—",
+                op.source,
+                op.status,
+                card,
+                pname,
+                pq,
+                cost,
+                azs,
+                car_api,
+                drv,
+                op.actual_car or "—",
+                op.confirmed_user.full_name if op.confirmed_user else "—",
+            ])
+
+    # Отправляем файл снаружи блока БД
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
     name = f"Fuel_Report_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx"
     await message.answer_document(BufferedInputFile(buf.read(), filename=name), caption="Выгрузка операций")
-
 
 @require_permission("admin:manage")
 async def cmd_run_import_now_dry(message: types.Message):
