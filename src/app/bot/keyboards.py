@@ -1,11 +1,12 @@
 """Тексты reply-кнопок и сборка клавиатур (единое место, без расхождений с регистрацией)."""
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # --- Пользователь ---
 BTN_USER_PROFILE = "👤 Мой профиль"
 BTN_USER_LINK_HELP = "🔑 Как привязать аккаунт"
-BTN_USER_SEND_CHECK = "📸 Отправить чек"
 BTN_USER_HELP = "❓ Помощь"
 BTN_USER_HOME = "🏠 Главное меню"
 
@@ -47,6 +48,16 @@ def reply_keyboard_admin() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
     )
 
+
+def get_operation_confirm_keyboard(operation_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить", callback_query_data=f"op_confirm:{operation_id}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_query_data=f"op_reject:{operation_id}")
+            ]
+        ]
+    )
 
 def get_ocr_confirm_kb(op_id: int) -> InlineKeyboardMarkup:
     """Клавиатура подтверждения данных OCR"""
