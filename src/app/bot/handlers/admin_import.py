@@ -79,68 +79,93 @@ async def cmd_pending_ops(message: types.Message):
     await message.reply("Очередь (не confirmed):\n" + body)
 
 
+# ... (начало файла с импортами остается как в моем предыдущем ответе) ...
+
 @require_permission("admin:manage")
 async def btn_export_excel(message: types.Message):
-    await message.answer("⏳ Формирую Excel…")
+    await message.answer("⏳ Формирую полный отчет (23 колонки)…")
 
-    # Подготавливаем файл
     wb = Workbook()
     ws = wb.active
     ws.title = "Заправки"
+
+    # Строго 23 колонки по ТЗ
     headers = [
-        "ID", "Дата", "Время", "Источник", "Статус",
-        "Карта", "Топливо", "Объём (л)", "Стоимость",
-        "АЗС", "Госномер (API)", "Водитель (API)",
-        "Факт. госномер", "Подтвердил",
+        "ID", "Тип", "Источник", "Дата", "Время", "Карта", "Топливо", "Литры", "Сумма", "АЗС", "Чек",
+        "Авто(API)", "Водитель(API)", "OCR", "Предполагаемый", "Фактический", "Факт.Авто",
+        "Инициатор", "Подтвердил", "Статус", "Дата подтв", "Прим", "Готовность"
     ]
     ws.append(headers)
 
     with get_db_session() as db:
-        # Используем joinedload чтобы сразу вытащить пользователя
-        operations = db.query(FuelOperation).options(joinedload(FuelOperation.confirmed_user)).order_by(
-            FuelOperation.date_time.desc()).all()
+        operations = db.query(FuelOperation).order_by(FuelOperation.date_time.desc()).all()
 
         if not operations:
-            await message.answer("Нет данных.")
+            await message.answer("Нет данных для выгрузки.")
             return
 
-        # Перебираем операции ВНУТРИ сессии БД
         for op in operations:
+            # Извлекаем JSON API
             api = op.api_data if isinstance(op.api_data, dict) else {}
             row_inner = api.get("row") if isinstance(api.get("row"), dict) else {}
             card_o = api.get("card") if isinstance(api.get("card"), dict) else {}
 
+            # Парсим нужные поля
             card = api.get("cardNumber") or card_o.get("cardNumber") or "—"
             pname = api.get("productName") or row_inner.get("productName") or "—"
-            pq = api.get("productQuantity") or row_inner.get("productQuantity") or "—"
-            cost = api.get("productCost") or row_inner.get("productCost") or "—"
-            azs = api.get("azsNumber") or row_inner.get("azsNumber") or "—"
+            pq = api.get("productQuantity") or row_inner.get("productQuantity") or 0
+            cost = api.get("productCost") or row_inner.get("productCost") or 0
+            azs = api.get("azsNumber") or row_inner.get("azsNumber") or row_inner.get("AzsCode") or "—"
             car_api = api.get("carNum") or row_inner.get("carNum") or op.car_from_api or "—"
             drv = api.get("driverName") or row_inner.get("driverName") or "—"
 
-            ws.append([
-                op.id,
-                op.date_time.strftime("%d.%m.%Y") if op.date_time else "—",
-                op.date_time.strftime("%H:%M") if op.date_time else "—",
-                op.source,
-                op.status,
-                card,
-                pname,
-                pq,
-                cost,
-                azs,
-                car_api,
-                drv,
-                op.actual_car or "—",
-                op.confirmed_user.full_name if op.confirmed_user else "—",
-            ])
+            # Определяем пользователей безопасным запросом (на случай если relations не настроены)
+            presumed = db.query(User).filter_by(id=op.presumed_user_id).first() if op.presumed_user_id else None
+            confirmed = db.query(User).filter_by(id=op.confirmed_user_id).first() if op.confirmed_user_id else None
 
-    # Отправляем файл снаружи блока БД
+            fuel_type = "Топливная карта" if op.source == "api" else "Личные средства"
+            dt = op.date_time
+
+            presumed_name = presumed.full_name if presumed else "—"
+            confirmed_name = confirmed.full_name if confirmed else "—"
+
+            # Строгое сопоставление 23 колонок
+            row_data = [
+                op.id,  # 1. ID
+                fuel_type,  # 2. Тип
+                op.source or "api",  # 3. Источник
+                dt.strftime("%d.%m.%Y") if dt else "—",  # 4. Дата
+                dt.strftime("%H:%M:%S") if dt else "—",  # 5. Время
+                card,  # 6. Карта
+                pname,  # 7. Топливо
+                pq,  # 8. Литры
+                cost,  # 9. Сумма
+                azs,  # 10. АЗС
+                op.doc_number or "—",  # 11. Чек
+                car_api,  # 12. Авто(API)
+                drv,  # 13. Водитель(API)
+                "",  # 14. OCR (модуль отключен)
+                presumed_name,  # 15. Предполагаемый
+                confirmed_name,  # 16. Фактический
+                op.actual_car or car_api,  # 17. Факт.Авто
+                presumed_name,  # 18. Инициатор (кому бот послал запрос)
+                confirmed_name,  # 19. Подтвердил
+                op.status or "—",  # 20. Статус
+                op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—",  # 21. Дата подтв
+                "",  # 22. Примечание
+                "Да" if op.status == "confirmed" else "Нет"  # 23. Готовность к путевому листу
+            ]
+            ws.append(row_data)
+
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
     name = f"Fuel_Report_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.xlsx"
-    await message.answer_document(BufferedInputFile(buf.read(), filename=name), caption="Выгрузка операций")
+    await message.answer_document(
+        BufferedInputFile(buf.read(), filename=name),
+        caption="✅ Полная выгрузка операций (23 колонки) сформирована."
+    )
+
 
 @require_permission("admin:manage")
 async def cmd_run_import_now_dry(message: types.Message):

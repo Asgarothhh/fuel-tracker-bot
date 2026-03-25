@@ -23,21 +23,43 @@ SHEET_DISPUTED = "Заправки_спорные"
 SHEET_PERSONAL = "Заправки_личные_средства"
 SHEET_REF = "Справочники"
 
+# Точное соответствие ТЗ (23 колонки)
 HEADERS = [
-    "ID", "Тип", "Источник", "Дата", "Время", "Карта", "Топливо", "Литры", "Сумма", "АЗС", "Чек",
-    "Авто(API)", "Водитель(API)", "OCR", "Предполагаемый", "Фактический", "Факт.Авто",
-    "Инициатор", "Подтвердил", "Статус", "Дата подтв", "Прим", "Готовность",
+    "ID",
+    "Тип заправки",
+    "Источник",
+    "Дата",
+    "Время",
+    "Карта",
+    "Топливо",
+    "Литры",
+    "Сумма",
+    "АЗС",
+    "Чек",
+    "Авто(API)",
+    "Водитель(API)",
+    "Данные OCR",
+    "Предполагаемый пользователь",
+    "Фактически подтвердивший",
+    "Фактическое авто",
+    "Кто первоначально получил запрос",
+    "Кто окончательно подтвердил",
+    "Статус подтверждения",
+    "Дата и время подтверждения",
+    "Примечание",
+    "Готовность к путевому листу"
 ]
 
 
 def _first_confirmation_sender_name(db, op_id: int) -> str:
+    """Определяет, кому первому бот отправил запрос на подтверждение"""
     h = (
         db.query(ConfirmationHistory)
         .filter_by(operation_id=op_id)
         .order_by(ConfirmationHistory.id.asc())
         .first()
     )
-    if not h or not h.to_user_id:
+    if not h or not getattr(h, "to_user_id", None):
         return "—"
     u = db.query(User).filter_by(id=h.to_user_id).first()
     return u.full_name if u else "—"
@@ -55,41 +77,54 @@ def _operation_row(db, op: FuelOperation) -> list:
     api = op.api_data or {}
     if not isinstance(api, dict):
         api = {}
+
     row = api.get("row") or {}
     if not isinstance(row, dict):
         row = {}
+
     card_o = api.get("card") or {}
     card_num = api.get("cardNumber") or (card_o.get("cardNumber") if isinstance(card_o, dict) else None)
+
+    # Загрузка пользователей
     presumed = db.query(User).filter_by(id=op.presumed_user_id).first() if op.presumed_user_id else None
     confirmed = db.query(User).filter_by(id=op.confirmed_user_id).first() if op.confirmed_user_id else None
-    first_r = db.query(User).filter_by(id=op.first_recipient_user_id).first() if op.first_recipient_user_id else None
 
+    # Определяем первого получателя запроса
+    first_recipient = ""
+    if hasattr(op, "first_recipient_user_id") and op.first_recipient_user_id:
+        first_r_obj = db.query(User).filter_by(id=op.first_recipient_user_id).first()
+        first_recipient = first_r_obj.full_name if first_r_obj else ""
+    if not first_recipient:
+        first_recipient = _first_confirmation_sender_name(db, op.id)
+
+    # Формирование значений
     fuel_type = "Топливная карта" if op.source == "api" else "Личные средства"
     dt = op.date_time
+
     return [
-        op.id,
-        fuel_type,
-        op.source or "",
-        dt.strftime("%d.%m.%Y") if dt else "",
-        dt.strftime("%H:%M:%S") if dt else "",
-        card_num or "—",
-        api.get("productName") or row.get("productName") or "—",
-        api.get("productQuantity") or row.get("productQuantity") or 0,
-        api.get("productCost") or row.get("productCost") or 0,
-        api.get("azsNumber") or row.get("azsNumber") or row.get("AzsCode") or "—",
-        op.doc_number or "—",
-        op.car_from_api or "—",
-        api.get("driverName") or row.get("driverName") or "—",
-        _ocr_text(op),
-        presumed.full_name if presumed else "—",
-        confirmed.full_name if confirmed else "—",
-        op.actual_car or op.car_from_api or "—",
-        first_r.full_name if first_r else _first_confirmation_sender_name(db, op.id),
-        confirmed.full_name if confirmed else "—",
-        op.status or "",
-        op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—",
-        "",
-        "Да" if op.ready_for_waybill or op.status == "confirmed" else "Нет",
+        op.id,                                      # ID
+        fuel_type,                                  # Тип заправки
+        op.source or "",                            # Источник
+        dt.strftime("%d.%m.%Y") if dt else "",      # Дата
+        dt.strftime("%H:%M:%S") if dt else "",      # Время
+        card_num or "—",                            # Карта
+        api.get("productName") or row.get("productName") or "—", # Топливо
+        api.get("productQuantity") or row.get("productQuantity") or 0, # Литры
+        api.get("productCost") or row.get("productCost") or 0,         # Сумма
+        api.get("azsNumber") or row.get("azsNumber") or row.get("AzsCode") or "—", # АЗС
+        op.doc_number or "—",                       # Чек
+        op.car_from_api or "—",                     # Авто(API)
+        api.get("driverName") or row.get("driverName") or "—", # Водитель(API)
+        _ocr_text(op),                              # Данные OCR
+        presumed.full_name if presumed else "—",    # Предполагаемый пользователь
+        confirmed.full_name if confirmed else "—",  # Фактически подтвердивший
+        op.actual_car or op.car_from_api or "—",    # Фактическое авто
+        first_recipient,                            # Кто первоначально получил запрос
+        confirmed.full_name if confirmed else "—",  # Кто окончательно подтвердил
+        op.status or "",                            # Статус подтверждения
+        op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—", # Дата и время подтверждения
+        "",                                         # Примечание
+        "Да" if op.ready_for_waybill or op.status == "confirmed" else "Нет",    # Готовность к путевому листу
     ]
 
 
@@ -107,6 +142,7 @@ def _ensure_workbook(path: Path):
         wb[SHEET_REF].append(["Справочник", "Значение"])
         wb[SHEET_REF].append(["Обновлено", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")])
         return wb
+
     wb = load_workbook(path)
     if SHEET_CARDS not in wb.sheetnames:
         ws = wb.create_sheet(SHEET_CARDS)
@@ -132,39 +168,46 @@ def _sheet_has_id(ws, op_id: int) -> bool:
 
 def export_to_excel_final(op_id: int) -> None:
     """
-    Подтверждённые операции — лист Заправки_по_картам.
-    Спорные/ручные/отклонённые — Заправки_спорные.
+    Выгружает операцию в соответствующий лист.
     """
     with get_db_session() as db:
         op = db.query(FuelOperation).filter_by(id=op_id).first()
         if not op:
             return
+
         st = op.status or ""
         disputed = st in ("requires_manual", "rejected_by_other", "import_error")
+
         if disputed:
-            if op.exported_disputed_excel:
+            if getattr(op, "exported_disputed_excel", False):
                 return
             sheet_name = SHEET_DISPUTED
         elif st == "confirmed":
-            if op.exported_to_excel:
+            if getattr(op, "exported_to_excel", False):
                 return
-            sheet_name = SHEET_CARDS
+            sheet_name = SHEET_CARDS if op.source == "api" else SHEET_PERSONAL
         else:
             logger.debug("[excel] skip export op_id=%s status=%s", op_id, st)
             return
 
         row = _operation_row(db, op)
+
         try:
             wb = _ensure_workbook(MASTER_FILE)
             ws = wb[sheet_name]
             if not _sheet_has_id(ws, op_id):
                 ws.append(row)
             wb.save(MASTER_FILE)
+
             if disputed:
-                op.exported_disputed_excel = True
+                if hasattr(op, "exported_disputed_excel"):
+                    op.exported_disputed_excel = True
             else:
-                op.exported_to_excel = True
-                op.ready_for_waybill = True
+                if hasattr(op, "exported_to_excel"):
+                    op.exported_to_excel = True
+                if hasattr(op, "ready_for_waybill"):
+                    op.ready_for_waybill = True
+
             db.commit()
             logger.info("[excel] op_id=%s sheet=%s", op_id, sheet_name)
         except PermissionError as e:

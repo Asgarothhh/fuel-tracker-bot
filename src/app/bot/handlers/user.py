@@ -1,8 +1,10 @@
+import datetime
 import os
-import logging
-from datetime import datetime, timezone
-from aiogram import types, F
-from aiogram.filters import Command, StateFilter
+from time import timezone
+
+from aiogram import types
+from aiogram.filters import Command
+from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -23,8 +25,13 @@ from src.app.bot.keyboards import (
     BTN_ADMIN_HOME,
     BTN_USER_SEND_CHECK,
 )
+from aiogram import Bot, F, types
+from src.app.models import FuelOperation
 from src.app.bot.utils import extract_args
+from src.app.bot.keyboards import get_operation_confirm_keyboard # Ваша функция инлайн-кнопок
+import logging
 
+logger = logging.getLogger(__name__)
 
 class ReceiptStates(StatesGroup):
     waiting_for_photo = State()
@@ -35,7 +42,7 @@ class ReceiptStates(StatesGroup):
 logger = logging.getLogger("bot.user")
 
 USER_HELP_TEXT = (
-    "ℹ️ *Что умеет бот*\n\n"
+    "ℹ️ Что умеет бот\n\n"
     "• Заправки по карте — вам придёт запрос на подтверждение.\n"
     "• Привязка аккаунта — код от администратора.\n\n"
     "Команды:\n"
@@ -275,12 +282,59 @@ async def btn_user_home(message: types.Message):
 async def btn_admin_home(message: types.Message):
     await message.reply("Админ-панель:", reply_markup=reply_keyboard_admin())
 
+async def send_operation_to_user(bot: Bot, telegram_id: int, operation_id: int):
+    """Теперь функция принимает 'bot' как аргумент"""
+    try:
+        text = (
+            f"⛽ *Новая операция по карте*\n\n"
+            f"Обнаружена заправка #{operation_id}.\n"
+            f"Пожалуйста, подтвердите данные."
+        )
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            reply_markup=get_operation_confirm_keyboard(operation_id),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки: {e}")
+
+
+async def callback_op_confirm(call: types.CallbackQuery):
+    """Водитель подтвердил заправку"""
+    operation_id = int(call.data.split(":")[1])
+
+    with get_db_session() as db:
+        op = db.query(FuelOperation).filter_by(id=operation_id).first()
+        if op:
+            op.status = "confirmed"
+            db.commit()
+            # Здесь можно вызвать автоматический экспорт в Excel, если нужно по ТЗ
+            await call.message.edit_text(f"✅ Операция #{operation_id} подтверждена.")
+        else:
+            await call.answer("Операция не найдена", show_alert=True)
+    await call.answer()
+
+
+async def callback_op_reject(call: types.CallbackQuery):
+    """Водитель отклонил заправку (спорная ситуация)埋"""
+    operation_id = int(call.data.split(":")[1])
+
+    with get_db_session() as db:
+        op = db.query(FuelOperation).filter_by(id=operation_id).first()
+        if op:
+            op.status = "disputed"  # или "requires_manual"
+            db.commit()
+            await call.message.edit_text(f"❌ Операция #{operation_id} помечена как спорная. Админ разберется.")
+    await call.answer()
+
 
 def register_user_handlers(dp):
     dp.message.register(cmd_start, Command(commands=["start"]))
     dp.message.register(cmd_link, Command(commands=["link"]))
     dp.message.register(cmd_myprofile, Command(commands=["myprofile"]))
     dp.message.register(cmd_user_help, Command(commands=["help"]))
+    dp.message.register(btn_send_receipt_start, Command(commands=["check"]))
     dp.message.register(btn_user_profile, F.text == BTN_USER_PROFILE)
     dp.message.register(cmd_link_help, F.text == BTN_USER_LINK_HELP)
     dp.message.register(cmd_user_help, F.text == BTN_USER_HELP)
@@ -291,3 +345,11 @@ def register_user_handlers(dp):
     dp.callback_query.register(callback_ocr_confirm, F.data.startswith("ocr_confirm_"))
     dp.callback_query.register(callback_ocr_cancel, F.data.startswith("ocr_cancel_"))
     dp.callback_query.register(callback_select_car, F.data.startswith("select_car_"))
+    dp.message.register(btn_user_profile, lambda m: m.text == BTN_USER_PROFILE)
+    dp.message.register(cmd_link_help, lambda m: m.text == BTN_USER_LINK_HELP)
+    dp.message.register(cmd_user_help, lambda m: m.text == BTN_USER_HELP)
+    dp.message.register(btn_user_home, lambda m: m.text == BTN_USER_HOME)
+    dp.message.register(btn_admin_home, lambda m: m.text == BTN_ADMIN_HOME)
+    dp.callback_query.register(callback_op_confirm, F.data.startswith("op_confirm:"))
+    dp.callback_query.register(callback_op_reject, F.data.startswith("op_reject:"))
+
