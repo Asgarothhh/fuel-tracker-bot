@@ -1,5 +1,6 @@
 """Тексты reply-кнопок и сборка клавиатур (единое место, без расхождений с регистрацией)."""
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # --- Пользователь ---
 BTN_USER_PROFILE = "👤 Мой профиль"
@@ -43,4 +44,15 @@ def reply_keyboard_admin() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_ADMIN_HELP), KeyboardButton(text=BTN_ADMIN_HOME)],
         ],
         resize_keyboard=True,
+    )
+
+
+def get_operation_confirm_keyboard(operation_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить", callback_query_data=f"op_confirm:{operation_id}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_query_data=f"op_reject:{operation_id}")
+            ]
+        ]
     )
