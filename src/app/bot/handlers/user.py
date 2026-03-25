@@ -1,6 +1,13 @@
+import datetime
+import os
+from time import timezone
+
 from aiogram import types
 from aiogram.filters import Command
 from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+
 from src.app.db import get_db_session
 from src.app.models import User, FuelOperation, Car, ConfirmationHistory
 from src.app.permissions import user_has_permission, require_permission
@@ -327,6 +334,7 @@ def register_user_handlers(dp):
     dp.message.register(cmd_link, Command(commands=["link"]))
     dp.message.register(cmd_myprofile, Command(commands=["myprofile"]))
     dp.message.register(cmd_user_help, Command(commands=["help"]))
+    dp.message.register(btn_send_receipt_start, Command(commands=["check"]))
     dp.message.register(btn_user_profile, F.text == BTN_USER_PROFILE)
     dp.message.register(cmd_link_help, F.text == BTN_USER_LINK_HELP)
     dp.message.register(cmd_user_help, F.text == BTN_USER_HELP)

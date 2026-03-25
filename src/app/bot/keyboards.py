@@ -7,6 +7,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 # --- Пользователь ---
 BTN_USER_PROFILE = "👤 Мой профиль"
 BTN_USER_LINK_HELP = "🔑 Как привязать аккаунт"
+BTN_USER_SEND_CHECK = "📸 Отправить чек"
 BTN_USER_HELP = "❓ Помощь"
 BTN_USER_HOME = "🏠 Главное меню"
 

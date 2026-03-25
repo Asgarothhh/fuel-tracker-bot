@@ -29,6 +29,7 @@ async def main():
             BotCommand(command="help", description="Помощь по боту"),
             BotCommand(command="link", description="Привязать аккаунт: /link <код>"),
             BotCommand(command="myprofile", description="Профиль: карты и авто"),
+            BotCommand(command="check", description="Профиль: карты и авто"),
             BotCommand(command="users", description="Пользователи (админ)"),
             BotCommand(command="pending_ops", description="Неподтверждённые операции (админ)"),
             BotCommand(command="generate_code", description="Код привязки для user_id (админ)"),
