@@ -4,6 +4,9 @@ from typing import Union
 from aiogram import types
 from src.app.db import get_db_session
 from src.app.models import User, Role, Permission, role_permissions
+from aiogram import BaseMiddleware
+from aiogram.types import Message, CallbackQuery
+from typing import Callable, Dict, Any, Awaitable
 
 def user_has_permission(db, telegram_id: int, permission_name: str) -> bool:
     """
@@ -29,6 +32,34 @@ def user_has_permission(db, telegram_id: int, permission_name: str) -> bool:
     return bool(perm)
 
 
+class ActiveUserMiddleware(BaseMiddleware):
+    """
+    Глобальный фильтр: если пользователь привязан к Telegram,
+    но в базе active=False, бот перестает его обслуживать.
+    """
+
+    async def __call__(
+            self,
+            handler: Callable[[Message | CallbackQuery, Dict[str, Any]], Awaitable[Any]],
+            event: Message | CallbackQuery,
+            data: Dict[str, Any]
+    ) -> Any:
+        user_tg_id = event.from_user.id
+
+        with get_db_session() as db:
+            # Ищем пользователя по telegram_id
+            user = db.query(User).filter(User.telegram_id == user_tg_id).first()
+
+            # Если пользователь найден, но деактивирован — блокируем
+            if user and not user.active:
+                if isinstance(event, Message):
+                    await event.answer("❌ Ваш аккаунт деактивирован. Доступ к боту закрыт.")
+                elif isinstance(event, CallbackQuery):
+                    await event.answer("❌ Аккаунт деактивирован.", show_alert=True)
+                return  # Прерываем выполнение, хэндлеры не сработают
+
+        # Если всё ок — пропускаем запрос дальше
+        return await handler(event, data)
 def require_permission(permission_name: str):
     """
     Проверка прав для Message и CallbackQuery.

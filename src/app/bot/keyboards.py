@@ -89,3 +89,16 @@ def get_fuel_card_confirm_kb(op_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="❌ Нет, не я", callback_data=f"fuel_card_no_{op_id}")
     )
     return builder.as_markup()
+
+
+def get_admin_user_view_kb(user_id: int, is_active: bool) -> InlineKeyboardMarkup:
+    """Клавиатура для карточки пользователя в админке с кнопкой блокировки."""
+    toggle_text = "❌ Заблокировать" if is_active else "✅ Разблокировать"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Сгенерировать код", callback_data=f"gen_code:{user_id}")],
+            [InlineKeyboardButton(text=toggle_text, callback_data=f"toggle_active:{user_id}")],
+            [InlineKeyboardButton(text="Закрыть", callback_data="noop")]
+        ]
+    )

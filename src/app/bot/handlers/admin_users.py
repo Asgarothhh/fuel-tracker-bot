@@ -6,7 +6,7 @@ from aiogram import types
 from aiogram.filters import Command
 from aiogram.types import InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.exc import IntegrityError
-
+from src.app.bot.keyboards import get_admin_user_view_kb
 from src.app.config import TOKEN_SALT, CODE_TTL_HOURS
 from src.app.db import get_db_session
 from src.app.models import LinkToken, User
@@ -225,12 +225,9 @@ async def callback_view_user(call: types.CallbackQuery):
         f"Авто: {cars_s}\n"
         f"Активен: {'Да' if active else 'Нет'}\n"
     )
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="Сгенерировать код", callback_data=f"gen_code:{uid}")],
-            [InlineKeyboardButton(text="Закрыть", callback_data="noop")],
-        ]
-    )
+
+    # Используем новую функцию из keyboards.py
+    kb = get_admin_user_view_kb(uid, active)
     await call.message.answer(text, reply_markup=kb)
     await call.answer()
 
@@ -341,11 +338,54 @@ async def callback_revoke_code(call: types.CallbackQuery):
     await call.answer()
 
 
+@require_permission("admin:manage")
+async def callback_toggle_active(call: types.CallbackQuery):
+    user_id = int(call.data.split(":", 1)[1])
+
+    with get_db_session() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            await call.answer("Пользователь не найден.", show_alert=True)
+            return
+
+        # Меняем статус на противоположный (Soft Delete / Restore)
+        user.active = not user.active
+        new_status = user.active
+        db.commit()
+
+        # Сразу получаем обновленные данные для карточки
+        row = (
+            db.query(User.id, User.full_name, User.telegram_id, User.cards, User.cars, User.active)
+            .filter(User.id == user_id)
+            .first()
+        )
+
+    # Обновляем сообщение с новой информацией и кнопкой
+    uid, full_name, telegram_id, cards, cars, active = row
+    tg = f"id:{telegram_id}" if telegram_id else "—"
+    cards_s = ", ".join(cards or []) or "—"
+    cars_s = ", ".join(cars or []) or "—"
+    text = (
+        f"ID: {uid}\n"
+        f"ФИО: {full_name}\n"
+        f"Telegram: {tg}\n"
+        f"Карты: {cards_s}\n"
+        f"Авто: {cars_s}\n"
+        f"Активен: {'Да' if active else 'Нет'}\n"
+    )
+
+    kb = get_admin_user_view_kb(uid, active)
+    await call.message.edit_text(text, reply_markup=kb)
+
+    status_msg = "восстановлен" if new_status else "заблокирован"
+    await call.answer(f"Пользователь {status_msg}!", show_alert=False)
+
+
 def register_admin_user_handlers(dp):
     dp.message.register(cmd_users, Command(commands=["users"]))
     dp.message.register(cmd_generate_code, Command(commands=["generate_code"]))
     dp.message.register(cmd_export_codes, Command(commands=["export_codes"]))
-
+    dp.callback_query.register(callback_toggle_active, lambda c: c.data and c.data.startswith("toggle_active:"))
     dp.callback_query.register(callback_users_page, lambda c: c.data and c.data.startswith("users_page:"))
     dp.callback_query.register(callback_view_user, lambda c: c.data and c.data.startswith("view_user:"))
     dp.callback_query.register(callback_generate_code, lambda c: c.data and c.data.startswith("gen_code:"))
