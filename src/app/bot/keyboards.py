@@ -10,6 +10,7 @@ BTN_USER_LINK_HELP = "🔑 Как привязать аккаунт"
 BTN_USER_SEND_CHECK = "📸 Отправить чек"
 BTN_USER_HELP = "❓ Помощь"
 BTN_USER_HOME = "🏠 Главное меню"
+BTN_USER_PENDING = "⏳ Мои уведомления"
 
 # --- Администратор ---
 BTN_ADMIN_IMPORT = "📥 Обновить импорт"
@@ -30,7 +31,9 @@ def reply_keyboard_user() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_USER_PROFILE), KeyboardButton(text=BTN_USER_LINK_HELP)],
+            [KeyboardButton(text=BTN_USER_PENDING), KeyboardButton(text=BTN_USER_PROFILE)],  # Новая кнопка
             [KeyboardButton(text=BTN_USER_HELP), KeyboardButton(text=BTN_USER_HOME)],
+            [KeyboardButton(text=BTN_USER_SEND_CHECK)]
         ],
         resize_keyboard=True,
     )
@@ -89,3 +92,16 @@ def get_fuel_card_confirm_kb(op_id: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="❌ Нет, не я", callback_data=f"fuel_card_no_{op_id}")
     )
     return builder.as_markup()
+
+
+def get_admin_user_view_kb(user_id: int, is_active: bool) -> InlineKeyboardMarkup:
+    """Клавиатура для карточки пользователя в админке с кнопкой блокировки."""
+    toggle_text = "❌ Заблокировать" if is_active else "✅ Разблокировать"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Сгенерировать код", callback_data=f"gen_code:{user_id}")],
+            [InlineKeyboardButton(text=toggle_text, callback_data=f"toggle_active:{user_id}")],
+            [InlineKeyboardButton(text="Закрыть", callback_data="noop")]
+        ]
+    )
