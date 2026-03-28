@@ -1,6 +1,7 @@
 # src/app/jobs.py
 import logging
 from datetime import datetime, timedelta, timezone
+from aiogram import Bot
 from sqlalchemy.exc import SQLAlchemyError
 from src.app.belorusneft_api import fetch_operational_raw, parse_operations
 from src.app.db import get_db_session
@@ -8,7 +9,10 @@ from src.app.models import FuelOperation, Schedule, User, FuelCard, Car
 from src.app.bot_handlers import send_operation_to_user
 
 
-async def run_import_job(schedule_name: str, dry_run: bool = False): # <-- Проверьте наличие dry_run=False    log = logging.getLogger(__name__)
+async def run_import_job(bot: Bot, schedule_name: str, dry_run: bool = False):
+    log = logging.getLogger(__name__)
+    new_count = 0
+
     try:
         # 1. Получаем данные из API (за вчера)
         now_utc = datetime.now(timezone.utc)
@@ -20,7 +24,6 @@ async def run_import_job(schedule_name: str, dry_run: bool = False): # <-- Пр�
         raw = fetch_operational_raw(target_dt)
         operations = parse_operations(raw)
 
-        new_count = 0
         with get_db_session() as db:
             for op_data in operations:
                 # 2. Проверка на дубли (Дата + Чек)
@@ -66,10 +69,15 @@ async def run_import_job(schedule_name: str, dry_run: bool = False): # <-- Пр�
 
                 db.add(new_op)
                 db.flush()  # Получаем ID
+                db.commit()
 
                 # 5. Сразу отправляем в Telegram
                 if found_user and found_user.telegram_id:
-                    await send_operation_to_user(found_user.telegram_id, new_op.id)
+                    try:
+                        # ИСПРАВЛЕНИЕ: Передаем bot первым аргументом
+                        await send_operation_to_user(bot, found_user.telegram_id, new_op.id)
+                    except Exception as e:
+                        log.error(f"Уведомление не отправлено {found_user.telegram_id}: {e}")
 
                 new_count += 1
 
@@ -78,6 +86,6 @@ async def run_import_job(schedule_name: str, dry_run: bool = False): # <-- Пр�
             if sched: sched.last_run = now_utc
             db.commit()
 
-        log.info(f"Job {schedule_name} finished. New ops: {new_count}")
+        log.info(f"Job {schedule_name} finished. New ops: {new_count}")  # ИСПРАВЛЕНО
     except Exception as e:
-        log.exception(f"Error in job {schedule_name}: {e}")
+        log.exception(f"Error in job {schedule_name}: {e}")  # ИСПРАВЛЕНО

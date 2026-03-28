@@ -10,6 +10,7 @@ BTN_USER_LINK_HELP = "🔑 Как привязать аккаунт"
 BTN_USER_SEND_CHECK = "📸 Отправить чек"
 BTN_USER_HELP = "❓ Помощь"
 BTN_USER_HOME = "🏠 Главное меню"
+BTN_USER_PENDING = "⏳ Мои уведомления"
 
 # --- Администратор ---
 BTN_ADMIN_IMPORT = "📥 Обновить импорт"
@@ -30,7 +31,9 @@ def reply_keyboard_user() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_USER_PROFILE), KeyboardButton(text=BTN_USER_LINK_HELP)],
+            [KeyboardButton(text=BTN_USER_PENDING), KeyboardButton(text=BTN_USER_PROFILE)],  # Новая кнопка
             [KeyboardButton(text=BTN_USER_HELP), KeyboardButton(text=BTN_USER_HOME)],
+            [KeyboardButton(text=BTN_USER_SEND_CHECK)]
         ],
         resize_keyboard=True,
     )
