@@ -24,7 +24,7 @@ from src.app.bot.keyboards import (
     BTN_USER_HELP,
     BTN_USER_HOME,
     BTN_ADMIN_HOME,
-    BTN_USER_SEND_CHECK, BTN_USER_PENDING,
+    BTN_USER_SEND_CHECK, BTN_USER_PENDING, BTN_USER_CARS,
 )
 from aiogram import Bot, F, types
 from src.app.models import FuelOperation
@@ -38,10 +38,10 @@ class ReceiptStates(StatesGroup):
     waiting_for_photo = State()
     waiting_for_confirmation = State()
     waiting_for_car = State()
-    waiting_for_real_fueler = State()
     waiting_for_real_fueler = State()  # Кто заправлялся (ФИО)
     waiting_for_disputed_car = State()  # Какое авто (при споре)
     waiting_for_confirmed_car = State()  # Какое авто (при подтверждении)
+    waiting_for_new_car_add = State()
 
 
 logger = logging.getLogger("bot.user")
@@ -105,7 +105,7 @@ async def cmd_pending(message: types.Message):
             FuelOperation.status.in_(["new", "loaded", "pending"]),
             # Замените assumed_user_id на ваше поле, если оно называется иначе (например, target_user_id)
             # В ТЗ указано "предполагаемый пользователь"
-            FuelOperation.assumed_user_id == user.id
+            FuelOperation.presumed_user_id == user.id
         ).all()
 
         if not pending_ops:
@@ -330,19 +330,34 @@ async def btn_user_home(message: types.Message):
 async def btn_admin_home(message: types.Message):
     await message.reply("Админ-панель:", reply_markup=reply_keyboard_admin())
 
+
 async def send_operation_to_user(bot: Bot, telegram_id: int, operation_id: int):
-    """Теперь функция принимает 'bot' как аргумент"""
     try:
+        with get_db_session() as db:
+            op = db.query(FuelOperation).get(operation_id)
+            if not op: return
+
+            api = op.api_data if isinstance(op.api_data, dict) else {}
+            row = api.get("row") if isinstance(api.get("row"), dict) else {}
+
+            dt = op.date_time.strftime("%d.%m.%Y %H:%M") if op.date_time else "—"
+            fuel = api.get("productName") or row.get("productName") or "—"
+            qty = api.get("productQuantity") or row.get("productQuantity") or "—"
+            azs = api.get("azsNumber") or row.get("azsNumber") or row.get("AzsCode") or "—"
+            doc = op.doc_number or api.get("docNumber") or row.get("docNumber") or "—"
+
         text = (
-            f"⛽ *Новая операция по карте*\n\n"
-            f"Обнаружена заправка #{operation_id}.\n"
-            f"Пожалуйста, подтвердите данные."
+            f"По вашей топливной карте обнаружена заправка за {dt}.\n"
+            f"Топливо: {fuel}.\n"
+            f"Количество: {qty} л.\n"
+            f"АЗС: {azs}.\n"
+            f"Чек: {doc}.\n\n"
+            f"Это действительно была ваша заправка?"
         )
         await bot.send_message(
             chat_id=telegram_id,
             text=text,
-            reply_markup=get_fuel_card_confirm_kb(operation_id),
-            parse_mode="Markdown"
+            reply_markup=get_fuel_card_confirm_kb(operation_id)
         )
     except Exception as e:
         logger.error(f"Ошибка отправки: {e}")
@@ -393,6 +408,7 @@ async def callback_fuel_card_confirm(call: types.CallbackQuery, state: FSMContex
         else:
             op.status = "confirmed"
             op.confirmed_at = datetime.datetime.now(datetime.timezone.utc)
+            op.confirmed_user_id = user.id
             if not op.car_from_api:
                 first_car = user.cars[0]
                 # Проверка: если это объект Car — берем атрибут, если строка — берем саму строку
@@ -492,7 +508,18 @@ async def process_real_fueler_name(message: types.Message, state: FSMContext, bo
     full_name_input = message.text.strip()
 
     with get_db_session() as db:
-        # Ищем потенциальных пользователей
+        op = db.query(FuelOperation).get(op_id)
+
+        # Защита от бесконечного пинг-понга (> 3 перенаправлений)
+        redirect_count = db.query(ConfirmationHistory).filter_by(operation_id=op_id, answer="redirected").count()
+        if redirect_count >= 3:
+            op.status = "requires_manual"
+            db.commit()
+            await message.answer(
+                "⚠️ Операция перенаправлялась слишком много раз. Она помечена как спорная и передана администратору.")
+            await state.clear()
+            return
+
         potential_users = db.query(User).filter(User.full_name.ilike(f"%{full_name_input}%")).all()
 
         if not potential_users:
@@ -506,17 +533,13 @@ async def process_real_fueler_name(message: types.Message, state: FSMContext, bo
 
         target_user = potential_users[0]
 
-        # 1. ЗАЩИТА ОТ ПЕРЕНАПРАВЛЕНИЯ САМОМУ СЕБЕ
         if target_user.telegram_id == message.from_user.id:
             await message.answer(
                 "❌ Вы не можете перенаправить операцию на самого себя. Введите ФИО другого сотрудника:")
             return
 
         if target_user and target_user.telegram_id:
-            op = db.query(FuelOperation).get(op_id)
-            op.car_from_user = car_plate_input.upper() if car_plate_input else None
-
-            # Записываем в историю этот переход (важно для обратного возврата)
+            op.car_from_api = car_plate_input.upper() if car_plate_input else op.car_from_api
             history = ConfirmationHistory(
                 operation_id=op.id,
                 from_user_id=db.query(User).filter_by(telegram_id=message.from_user.id).first().id,
@@ -527,13 +550,13 @@ async def process_real_fueler_name(message: types.Message, state: FSMContext, bo
             db.add(history)
             db.commit()
 
-            # Отправляем уведомление коллеге
             from src.app.bot.notifications import send_operation_to_user
             await send_operation_to_user(bot, target_user.telegram_id, op_id)
-
             await message.answer(f"✅ Запрос перенаправлен сотруднику {target_user.full_name}.")
             await state.clear()
         else:
+            op.status = "requires_manual"
+            db.commit()
             await message.answer("⚠️ У найденного сотрудника не привязан Telegram. Данные переданы администратору.")
             await state.clear()
 
@@ -576,6 +599,35 @@ async def process_confirmed_car(message: types.Message, state: FSMContext):
             await state.clear()
 
 
+async def btn_user_cars_menu(message: types.Message, state: FSMContext):
+    """Показывает авто юзера и просит ввести новое для добавления."""
+    with get_db_session() as db:
+        user = db.query(User).filter_by(telegram_id=message.from_user.id).first()
+        if not user: return
+        cars_s = "\n".join([f"• {c}" for c in (user.cars or [])]) or "Нет привязанных авто."
+
+    await message.answer(
+        f"🚗 *Ваши автомобили:*\n{cars_s}\n\nЧтобы добавить новое авто, просто напишите его госномер (например, 1234 AB-7):",
+        parse_mode="Markdown")
+    await state.set_state(ReceiptStates.waiting_for_new_car_add)
+
+
+async def process_add_new_car(message: types.Message, state: FSMContext):
+    new_car = message.text.strip().upper()
+    with get_db_session() as db:
+        user = db.query(User).filter_by(telegram_id=message.from_user.id).first()
+        if user:
+            u_cars = list(user.cars or [])
+            if new_car not in u_cars:
+                u_cars.append(new_car)
+                user.cars = u_cars
+                db.commit()
+                await message.answer(f"✅ Автомобиль {new_car} успешно добавлен в ваш профиль!")
+            else:
+                await message.answer("Этот автомобиль уже есть в вашем профиле.")
+    await state.clear()
+
+
 def register_user_handlers(dp):
     dp.message.register(cmd_start, Command(commands=["start"]))
     dp.message.register(cmd_link, Command(commands=["link"]))
@@ -592,18 +644,21 @@ def register_user_handlers(dp):
     dp.message.register(process_confirmed_car, ReceiptStates.waiting_for_confirmed_car)
     dp.message.register(process_disputed_car, ReceiptStates.waiting_for_disputed_car)
     dp.message.register(process_real_fueler_name, ReceiptStates.waiting_for_real_fueler)
+    dp.message.register(btn_user_cars_menu, F.text == BTN_USER_CARS)
+    dp.message.register(process_add_new_car, ReceiptStates.waiting_for_new_car_add)
     dp.message.register(cmd_pending, Command(commands=["pending"]))
     dp.callback_query.register(callback_fuel_card_confirm, F.data.startswith("fuel_card_yes_"))
     dp.callback_query.register(callback_fuel_card_reject, F.data.startswith("fuel_card_no_"))
     dp.callback_query.register(callback_ocr_confirm, F.data.startswith("ocr_confirm_"))
     dp.callback_query.register(callback_ocr_cancel, F.data.startswith("ocr_cancel_"))
     dp.callback_query.register(callback_select_car, F.data.startswith("select_car_"))
-    dp.message.register(btn_user_profile, lambda m: m.text == BTN_USER_PROFILE)
-    dp.message.register(cmd_link_help, lambda m: m.text == BTN_USER_LINK_HELP)
-    dp.message.register(cmd_user_help, lambda m: m.text == BTN_USER_HELP)
-    dp.message.register(btn_user_home, lambda m: m.text == BTN_USER_HOME)
-    dp.message.register(btn_admin_home, lambda m: m.text == BTN_ADMIN_HOME)
+    # dp.message.register(btn_user_profile, lambda m: m.text == BTN_USER_PROFILE)
+    # dp.message.register(cmd_link_help, lambda m: m.text == BTN_USER_LINK_HELP)
+    # dp.message.register(cmd_user_help, lambda m: m.text == BTN_USER_HELP)
+    # dp.message.register(btn_user_home, lambda m: m.text == BTN_USER_HOME)
+    # dp.message.register(btn_admin_home, lambda m: m.text == BTN_ADMIN_HOME)
     dp.callback_query.register(callback_op_confirm, F.data.startswith("op_confirm:"))
     dp.callback_query.register(callback_op_reject, F.data.startswith("op_reject:"))
     dp.message.register(cmd_pending, F.text == BTN_USER_PENDING)
+
 
