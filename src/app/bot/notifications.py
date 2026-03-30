@@ -9,31 +9,42 @@ logger = logging.getLogger(__name__)
 
 async def send_operation_to_user(bot: Bot, telegram_id: int, operation_id: int):
     """
-    Отправляет уведомление пользователю о новой заправке по карте.
+    Отправляет уведомление пользователю о новой заправке по карте согласно ТЗ.
     """
     try:
         with get_db_session() as db:
             op = db.query(FuelOperation).get(operation_id)
             if not op:
-                logger.error(f"❌ Операция {operation_id} не найдена в базе при отправке!")
+                logger.error(f"❌ Операция {operation_id} не найдена!")
                 return
 
-            # Используем HTML вместо Markdown, он надежнее
-            text = (
-                f"⛽ <b>Новая операция по карте!</b>\n\n"
-                f"📅 Дата: {op.date_time.strftime('%d.%m.%Y %H:%M')}\n"
-                f"💳 Карта: <code>{op.doc_number}</code>\n"  
-                f"🚗 Авто (API): {op.car_from_api or 'Не указано'}\n\n"
-                "Это ваша заправка? Подтвердите для формирования путевого листа."
-            )
+            # Безопасное извлечение данных из JSON (api_data)
+            api = op.api_data if isinstance(op.api_data, dict) else {}
+            # Иногда данные лежат во вложенном ключе 'row'
+            row = api.get("row") if isinstance(api.get("row"), dict) else {}
 
-            await bot.send_message(
-                telegram_id,
-                text,
-                reply_markup=get_fuel_card_confirm_kb(op.id),
-                parse_mode="HTML" # ❗️ Изменили на HTML
-            )
-            logger.info(f"✅ Уведомление по операции {operation_id} отправлено {telegram_id}")
+            # Собираем переменные для текста (берем либо из корня api, либо из row, либо из полей модели)
+            dt = op.date_time.strftime("%d.%m.%Y %H:%M") if op.date_time else "—"
+            fuel = api.get("productName") or row.get("productName") or "—"
+            qty = api.get("productQuantity") or row.get("productQuantity") or "—"
+            azs = api.get("azsNumber") or row.get("azsNumber") or row.get("AzsCode") or "—"
+            # Чек — это doc_number в модели или в API
+            doc = op.doc_number or api.get("docNumber") or row.get("docNumber") or "—"
 
+        # Строго по ТЗ
+        text = (
+            f"По вашей топливной карте обнаружена заправка за {dt}.\n"
+            f"Топливо: {fuel}.\n"
+            f"Количество: {qty}.\n"
+            f"АЗС: {azs}.\n"
+            f"Чек: {doc}.\n\n"
+            f"Это действительно была ваша заправка?"
+        )
+
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            reply_markup=get_fuel_card_confirm_kb(operation_id)
+        )
     except Exception as e:
-        logger.exception(f"Ошибка при отправке уведомления {telegram_id}: {e}")
+        logger.error(f"Ошибка отправки уведомления: {e}")

@@ -17,12 +17,14 @@ async def start_test(my_tg_id: int):
     mock_api_data = [{
         "doc_number": f"MOCK-{random.randint(1000, 9999)}",
         "date_time": datetime.now(),
-        "card_number": card_num,  # Совпадение!
-        "car_num": plate,  # Совпадение!
+        "card_number": card_num,
+        "car_num": plate,
+        "driver_name": "Иванов Иван Иванович",
         "raw": {
-            "fuel_type": random.choice(["АИ-95", "ДТ"]),
-            "amount": round(random.uniform(20.0, 55.0), 2),
-            "address": "АЗС №77 Тестовая"
+            "productName": random.choice(["АИ-95", "ДТ"]),
+            "productQuantity": round(random.uniform(20.0, 55.0), 2),
+            "azsNumber": "77",
+            "docNumber": f"MOCK-{random.randint(1000, 9999)}"
         }
     }]
 

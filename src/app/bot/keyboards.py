@@ -31,7 +31,7 @@ def reply_keyboard_user() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_USER_PENDING), KeyboardButton(text=BTN_USER_SEND_CHECK)],
-            [KeyboardButton(text=BTN_USER_PROFILE), KeyboardButton(text=BTN_USER_CARS)],
+            [KeyboardButton(text=BTN_USER_PROFILE), KeyboardButton(text=BTN_USER_CARS)], # Кнопка "Мои авто" здесь
             [KeyboardButton(text=BTN_USER_HELP), KeyboardButton(text=BTN_USER_LINK_HELP)]
         ],
         resize_keyboard=True,
@@ -42,8 +42,9 @@ def reply_keyboard_admin() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=BTN_ADMIN_IMPORT), KeyboardButton(text=BTN_ADMIN_PENDING)],
             [KeyboardButton(text=BTN_ADMIN_DISPUTED), KeyboardButton(text=BTN_ADMIN_RECENT)],
-            [KeyboardButton(text=BTN_ADMIN_EXPORT_EXCEL), KeyboardButton(text=BTN_ADMIN_USERS)],
-            [KeyboardButton(text=BTN_ADMIN_SCHEDULES), KeyboardButton(text=BTN_ADMIN_HELP)],
+            [KeyboardButton(text=BTN_ADMIN_SCHEDULES), KeyboardButton(text=BTN_ADMIN_USERS)],
+            [KeyboardButton(text=BTN_ADMIN_SCHEDULE_SET), KeyboardButton(text=BTN_ADMIN_SCHEDULE_DEL)], # Вернули кнопки расписания
+            [KeyboardButton(text=BTN_ADMIN_EXPORT_EXCEL), KeyboardButton(text=BTN_ADMIN_HELP)],
         ],
         resize_keyboard=True,
     )
