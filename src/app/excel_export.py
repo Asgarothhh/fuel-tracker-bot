@@ -24,7 +24,16 @@ SHEET_DISPUTED = "Спорные заправки"
 SHEET_PERSONAL = "Заправки_личные_средства"
 SHEET_REF = "Справочники"
 
-# Точное соответствие ТЗ (23 колонки)
+STATUS_RU = {
+    "loaded_from_api": "Загружена из API",
+    "pending": "Ожидает подтверждения",
+    "confirmed": "Подтверждена",
+    "requires_manual": "Требует ручной обработки",
+    "disputed": "Спорная",
+    "rejected_by_other": "Отклонена",
+    "import_error": "Ошибка импорта"
+}
+
 HEADERS = [
     "ID",
     "Тип заправки",
@@ -74,58 +83,46 @@ def _ocr_text(op: FuelOperation) -> str:
     return str(op.ocr_data)
 
 
-def _operation_row(db, op: FuelOperation) -> list:
-    api = op.api_data or {}
-    if not isinstance(api, dict):
-        api = {}
+def _operation_row(db, op):
+    api = op.api_data if isinstance(op.api_data, dict) else {}
+    row_inner = api.get("row") if isinstance(api.get("row"), dict) else {}
+    card_o = api.get("card") if isinstance(api.get("card"), dict) else {}
 
-    row = api.get("row") or {}
-    if not isinstance(row, dict):
-        row = {}
+    # Собираем данные
+    card = api.get("cardNumber") or card_o.get("cardNumber") or "—"
+    pname = api.get("productName") or row_inner.get("productName") or "—"
+    pq = api.get("productQuantity") or row_inner.get("productQuantity") or 0
+    cost = api.get("productCost") or row_inner.get("productCost") or 0
+    azs = api.get("azsNumber") or row_inner.get("azsNumber") or row_inner.get("AzsCode") or "—"
+    car_api = op.car_from_api or api.get("carNum") or row_inner.get("carNum") or "—"
+    drv = api.get("driverName") or row_inner.get("driverName") or "—"
 
-    card_o = api.get("card") or {}
-    card_num = api.get("cardNumber") or (card_o.get("cardNumber") if isinstance(card_o, dict) else None)
-
-    # Загрузка пользователей
     presumed = db.query(User).filter_by(id=op.presumed_user_id).first() if op.presumed_user_id else None
     confirmed = db.query(User).filter_by(id=op.confirmed_user_id).first() if op.confirmed_user_id else None
 
-    # Определяем первого получателя запроса
-    first_recipient = ""
-    if hasattr(op, "first_recipient_user_id") and op.first_recipient_user_id:
-        first_r_obj = db.query(User).filter_by(id=op.first_recipient_user_id).first()
-        first_recipient = first_r_obj.full_name if first_r_obj else ""
-    if not first_recipient:
-        first_recipient = _first_confirmation_sender_name(db, op.id)
-
-    # Формирование значений
-    fuel_type = "Топливная карта" if op.source == "api" else "Личные средства"
     dt = op.date_time
+    fuel_type = "Топливная карта" if op.source == "api" else "Личные средства"
 
+    # Возвращаем список из 23 колонок согласно ТЗ
     return [
         op.id,                                      # ID
-        fuel_type,                                  # Тип заправки
-        op.source or "",                            # Источник
-        dt.strftime("%d.%m.%Y") if dt else "",      # Дата
-        dt.strftime("%H:%M:%S") if dt else "",      # Время
-        card_num or "—",                            # Карта
-        api.get("productName") or row.get("productName") or "—", # Топливо
-        api.get("productQuantity") or row.get("productQuantity") or 0, # Литры
-        api.get("productCost") or row.get("productCost") or 0,         # Сумма
-        api.get("azsNumber") or row.get("azsNumber") or row.get("AzsCode") or "—", # АЗС
+        fuel_type,                                  # Тип
+        op.source or "api",                         # Источник
+        dt.strftime("%d.%m.%Y") if dt else "—",    # Дата
+        dt.strftime("%H:%M:%S") if dt else "—",    # Время
+        card, pname, pq, cost, azs,                 # Карта, Топливо, Литры, Сумма, АЗС
         op.doc_number or "—",                       # Чек
-        op.car_from_api or "—",                     # Авто(API)
-        api.get("driverName") or row.get("driverName") or "—", # Водитель(API)
-        _ocr_text(op),                              # Данные OCR
-        presumed.full_name if presumed else "—",    # Предполагаемый пользователь
-        confirmed.full_name if confirmed else "—",  # Фактически подтвердивший
-        op.actual_car or op.car_from_api or "—",    # Фактическое авто
-        first_recipient,                            # Кто первоначально получил запрос
-        confirmed.full_name if confirmed else "—",  # Кто окончательно подтвердил
-        op.status or "",                            # Статус подтверждения
-        op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—", # Дата и время подтверждения
+        car_api, drv,                               # Авто(API), Водитель(API)
+        "",                                         # Данные OCR
+        presumed.full_name if presumed else "—",    # Предполагаемый
+        confirmed.full_name if confirmed else "—",  # Фактический
+        op.actual_car or car_api,                   # Факт.Авто
+        presumed.full_name if presumed else "—",    # Инициатор
+        confirmed.full_name if confirmed else "—",  # Подтвердил
+        STATUS_RU.get(op.status, op.status or "—"), # Статус (РУССКИЙ)
+        op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—", # Дата подтв
         "",                                         # Примечание
-        "Да" if op.ready_for_waybill or op.status == "confirmed" else "Нет",    # Готовность к путевому листу
+        "Да" if op.status == "confirmed" else "Нет" # Готовность
     ]
 
 
