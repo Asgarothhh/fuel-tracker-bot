@@ -58,26 +58,39 @@ async def cmd_admin_help(message: types.Message):
 @require_permission("admin:manage")
 async def cmd_pending_ops(message: types.Message):
     with get_db_session() as db:
+        # Берем операции, которые еще не подтверждены и не в архиве
         ops = (
             db.query(FuelOperation)
-            .filter(FuelOperation.status != "confirmed")
+            .filter(FuelOperation.status.in_(["loaded_from_api", "pending", "requires_manual", "disputed"]))
             .order_by(FuelOperation.id.desc())
-            .limit(30)
+            .limit(20)  # Ограничим чуть сильнее, так как строки станут длиннее
             .all()
         )
 
         if not ops:
-            await message.reply("Нет операций вне статуса «confirmed».")
+            await message.reply("Список необработанных операций пуст.")
             return
 
-        # Формируем строки ВНУТРИ сессии
-        lines = [f"#{o.id} | {o.status} | чек {o.doc_number or '—'} | {o.date_time or '—'}" for o in ops[:25]]
+        lines = []
+        for o in ops:
+            # Безопасное извлечение данных из JSON
+            api = o.api_data if isinstance(o.api_data, dict) else {}
+            row = api.get("row") if isinstance(api.get("row"), dict) else {}
 
-    # Отправляем сообщение уже снаружи
+            # Собираем данные (приоритет: поля модели -> ключи API)
+            dt = o.date_time.strftime('%d.%m %H:%M') if o.date_time else "—"
+            card = api.get("cardNumber") or row.get("cardNumber") or "—"
+            qty = api.get("productQuantity") or row.get("productQuantity") or "0"
+
+            # Формируем читаемую строку для админа
+            # Формат: #ID [Статус] Дата | Карта | Литры
+            line = f"<code>#{o.id}</code> [{o.status}] {dt} | 💳<code>{card[-4:]}</code> | ⛽️{qty}л"
+            lines.append(line)
+
     body = "\n".join(lines)
-    if len(ops) > 25:
-        body += "\n…"
-    await message.reply("Очередь (не confirmed):\n" + body)
+    header = "<b>📋 Необработанные операции (последние 20):</b>\n\n"
+
+    await message.reply(header + body, parse_mode="HTML")
 
 
 # ... (начало файла с импортами остается как в моем предыдущем ответе) ...
