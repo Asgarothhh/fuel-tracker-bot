@@ -1,8 +1,9 @@
 import logging
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
+from src.app.bot.keyboards import BTN_ADMIN_DISPUTED, BTN_ADMIN_RECENT
 
-from aiogram import types
+from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from openpyxl import Workbook
@@ -116,7 +117,7 @@ async def btn_export_excel(message: types.Message):
             pq = api.get("productQuantity") or row_inner.get("productQuantity") or 0
             cost = api.get("productCost") or row_inner.get("productCost") or 0
             azs = api.get("azsNumber") or row_inner.get("azsNumber") or row_inner.get("AzsCode") or "—"
-            car_api = api.get("carNum") or row_inner.get("carNum") or op.car_from_api or "—"
+            car_api = op.car_from_api or api.get("carNum") or row_inner.get("carNum") or "—"
             drv = api.get("driverName") or row_inner.get("driverName") or "—"
 
             # Определяем пользователей безопасным запросом (на случай если relations не настроены)
@@ -210,63 +211,66 @@ async def cmd_run_import_now(message: types.Message):
                     try:
                         dt_obj = datetime.fromisoformat(str(dt_raw).replace("Z", "+00:00"))
                     except Exception:
-                        dt_obj = None
+                        pass
 
                 doc_raw = op.get("doc_number") or op.get("docNumber")
                 doc = str(doc_raw).strip() if doc_raw is not None else None
 
-                filters = [FuelOperation.source == "api"]
-                if doc:
-                    filters.append(FuelOperation.doc_number == doc)
-                if dt_obj:
-                    filters.append(FuelOperation.date_time == dt_obj)
+                # Извлекаем данные
+                driver_name = op.get("driverName") or op.get("driver_name")
+                card_num = op.get("cardNumber") or op.get("card_number") or op.get("card")
+                if card_num: card_num = str(card_num).strip()
+                car_plate = op.get("carNum") or op.get("car_num") or op.get("car")
+                car_plate_norm = str(car_plate).strip().upper() if car_plate else None
 
-                if db.query(FuelOperation).filter(*filters).first():
-                    continue
+                # ПУНКТ 6: АВТО-ДОБАВЛЕНИЕ ПОЛЬЗОВАТЕЛЕЙ ИЗ API (ДО ПРОВЕРКИ НА ДУБЛИ!)
+                presumed_user = None
+                if driver_name:
+                    drv_clean = str(driver_name).strip()
+                    presumed_user = db.query(User).filter(User.full_name.ilike(drv_clean)).first()
+                    if not presumed_user:
+                        presumed_user = User(full_name=drv_clean, active=True)
+                        db.add(presumed_user)
+                        db.flush()
 
-                card_num = op.get("card_number") or op.get("cardNumber") or op.get("card")
-                if card_num is not None:
-                    card_num = str(card_num).strip()
+                if not presumed_user and card_num:
+                    presumed_user = db.query(User).filter(cast(User.cards, String).like(f"%{card_num}%")).first()
 
-                fuel_card = None
                 if card_num:
                     fuel_card = db.query(FuelCard).filter_by(card_number=card_num).first()
                     if not fuel_card:
                         fuel_card = FuelCard(card_number=card_num, active=True)
                         db.add(fuel_card)
                         db.flush()
-
-                presumed_user = None
-                if fuel_card and fuel_card.user_id:
-                    presumed_user = db.query(User).filter_by(id=fuel_card.user_id).first()
-                elif card_num:
-                    try:
-                        presumed_user = (
-                            db.query(User).filter(cast(User.cards, String).like(f"%{card_num}%")).first()
-                        )
-                    except Exception:
-                        presumed_user = None
-                    if presumed_user and fuel_card:
+                    if presumed_user:
                         fuel_card.user_id = presumed_user.id
+                        u_cards = list(presumed_user.cards or [])
+                        if card_num not in u_cards:
+                            u_cards.append(card_num)
+                            presumed_user.cards = u_cards
 
-                car_plate_norm = None
-                car_plate = op.get("carNum") or op.get("car_num") or op.get("car")
-                if car_plate:
-                    car_plate_norm = str(car_plate).strip().upper()
-                    car = db.query(Car).filter_by(plate=car_plate_norm).first()
-                    if not car:
-                        car = Car(plate=car_plate_norm)
-                        db.add(car)
+                if car_plate_norm:
+                    car_obj = db.query(Car).filter_by(plate=car_plate_norm).first()
+                    if not car_obj:
+                        car_obj = Car(plate=car_plate_norm)
+                        db.add(car_obj)
                         db.flush()
                     if presumed_user:
-                        owners = list(car.owners or [])
+                        owners = list(car_obj.owners or [])
                         if presumed_user.id not in owners:
                             owners.append(presumed_user.id)
-                            car.owners = owners
-                        user_cars = list(presumed_user.cars or [])
-                        if car_plate_norm not in user_cars:
-                            user_cars.append(car_plate_norm)
-                            presumed_user.cars = user_cars
+                            car_obj.owners = owners
+                        u_cars = list(presumed_user.cars or [])
+                        if car_plate_norm not in u_cars:
+                            u_cars.append(car_plate_norm)
+                            presumed_user.cars = u_cars
+
+                # Проверка дубликатов самой операции (после того как справочники пополнены)
+                filters = [FuelOperation.source == "api"]
+                if doc: filters.append(FuelOperation.doc_number == doc)
+                if dt_obj: filters.append(FuelOperation.date_time == dt_obj)
+                if db.query(FuelOperation).filter(*filters).first():
+                    continue
 
                 new_op = FuelOperation(
                     source="api",
@@ -274,30 +278,29 @@ async def cmd_run_import_now(message: types.Message):
                     imported_at=datetime.now(timezone.utc),
                     status="loaded",
                 )
-                if doc:
-                    new_op.doc_number = doc
-                if dt_obj:
-                    new_op.date_time = dt_obj
-                if presumed_user:
-                    new_op.presumed_user_id = presumed_user.id
-                if car_plate_norm:
-                    new_op.car_from_api = car_plate_norm
+                if doc: new_op.doc_number = doc
+                if dt_obj: new_op.date_time = dt_obj
+                if presumed_user: new_op.presumed_user_id = presumed_user.id
+                if car_plate_norm: new_op.car_from_api = car_plate_norm
 
                 db.add(new_op)
                 new_count += 1
 
             db.commit()
 
-        admin_rows = []
+        # СОБИРАЕМ АДМИНОВ В ПЛОСКИЙ СПИСОК (чтобы избежать DetachedInstanceError)
+        admin_info = []
         with get_db_session() as db2:
-            for u in db2.query(User).filter(User.telegram_id != None).all():
+            all_users_with_tg = db2.query(User).filter(User.telegram_id != None).all()
+            for u in all_users_with_tg:
                 try:
                     if user_has_permission(db2, u.telegram_id, "admin:manage"):
-                        admin_rows.append(u)
+                        admin_info.append({"id": u.id, "tg_id": u.telegram_id})
                 except Exception:
                     continue
 
-        if new_count > 0 and admin_rows:
+        if new_count > 0 and admin_info:
+            recent_ops_raw = []
             with get_db_session() as db3:
                 recent_ops = (
                     db3.query(
@@ -310,28 +313,28 @@ async def cmd_run_import_now(message: types.Message):
                     .limit(new_count)
                     .all()
                 )
-                recent_ops_raw = []
                 for op_id, doc_number, date_time, api_data in recent_ops:
                     api = api_data or {}
                     recent_ops_raw.append({
                         "id": op_id,
-                        "doc": doc_number or api.get("docNumber") or api.get("doc_number"),
-                        "dt": date_time.isoformat() if date_time else api.get("dateTimeIssue"),
-                        "card": api.get("cardNumber") or api.get("card_number") or "—",
+                        "doc": doc_number or api.get("docNumber") or api.get("doc_number") or "—",
+                        "dt": date_time.strftime("%d.%m.%Y %H:%M") if date_time else api.get("dateTimeIssue") or "—",
+                        "card": api.get("cardNumber") or api.get("card_number") or api.get("card") or "—",
                         "azs": api.get("azsNumber") or api.get("azs") or "—",
                         "qty": api.get("productQuantity") or api.get("quantity") or "—",
                     })
 
-            for admin in admin_rows:
+            # РАССЫЛКА (вне блоков сессий БД)
+            for admin in admin_info:
                 for op in recent_ops_raw:
                     text = (
-                        "Новая операция из API:\n"
-                        f"ID: {op['id']}\n"
+                        "⛽️ **Новая операция из API:**\n"
+                        f"ID: `{op['id']}`\n"
                         f"Дата: {op['dt']}\n"
-                        f"Карта: {op['card']}\n"
+                        f"Карта: `{op['card']}`\n"
                         f"АЗС: {op['azs']}\n"
                         f"Чек: {op['doc']}\n"
-                        f"Кол-во: {op['qty']}"
+                        f"Кол-во: {op['qty']} л."
                     )
                     kb = InlineKeyboardMarkup(
                         inline_keyboard=[
@@ -341,15 +344,15 @@ async def cmd_run_import_now(message: types.Message):
                         ]
                     )
                     try:
-                        await message.bot.send_message(admin.telegram_id, text, reply_markup=kb)
-                    except Exception:
-                        logger.warning("Не удалось уведомить админа %s", admin.id)
+                        await message.bot.send_message(admin["tg_id"], text, reply_markup=kb, parse_mode="Markdown")
+                    except Exception as e:
+                        logger.warning("Не удалось уведомить админа ID %s: %s", admin["id"], e)
 
-        await message.reply(f"Импорт завершён. Новых операций: {new_count}")
+        await message.reply(f"✅ Импорт завершён.\nНовых операций в базе: {new_count}")
 
     except Exception as e:
         logger.exception("run_import_now")
-        await message.reply(f"Ошибка импорта: {e}")
+        await message.reply(f"❌ Ошибка импорта: {e}")
 
 
 @require_permission("admin:manage")
@@ -436,6 +439,41 @@ async def cmd_assign_op(message: types.Message):
 
 
 @require_permission("admin:manage")
+async def cmd_disputed_ops(message: types.Message):
+    """Показать спорные операции"""
+    with get_db_session() as db:
+        ops = db.query(FuelOperation).filter(FuelOperation.status == "requires_manual").order_by(
+            FuelOperation.id.desc()).limit(10).all()
+        if not ops:
+            await message.reply("✅ Нет спорных операций, требующих вмешательства.")
+            return
+
+        await message.reply("⚠️ **Спорные операции:**", parse_mode="Markdown")
+        for op in ops:
+            text = f"ID: {op.id} | Дата: {op.date_time}\nЧек: {op.doc_number} | Статус: Спорная"
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Подтвердить вручную", callback_data=f"confirm_op:{op.id}")],
+                [InlineKeyboardButton(text="👤 Назначить на...", callback_data=f"assign_op:{op.id}")]
+            ])
+            await message.answer(text, reply_markup=kb)
+
+
+@require_permission("admin:manage")
+async def cmd_recent_ops(message: types.Message):
+    """Показать последние операции"""
+    with get_db_session() as db:
+        ops = db.query(FuelOperation).order_by(FuelOperation.id.desc()).limit(15).all()
+        if not ops:
+            await message.reply("База операций пуста.")
+            return
+
+        lines = [
+            f"#{o.id} | {o.status} | {o.date_time.strftime('%d.%m %H:%M') if o.date_time else ''} | {o.car_from_api or ''}"
+            for o in ops]
+        await message.reply("🕒 **Последние 15 операций:**\n\n" + "\n".join(lines), parse_mode="Markdown")
+
+
+@require_permission("admin:manage")
 async def btn_update_import(message: types.Message):
     await cmd_run_import_now(message)
 
@@ -485,7 +523,8 @@ def register_admin_import_handlers(dp):
     dp.message.register(cmd_run_import_now_dry, Command(commands=["run_import_now_dry"]))
     dp.message.register(cmd_assign_op, Command(commands=["assign_op"]))
     dp.message.register(cmd_pending_ops, Command(commands=["pending_ops"]))
-
+    dp.message.register(cmd_disputed_ops, F.text == BTN_ADMIN_DISPUTED)
+    dp.message.register(cmd_recent_ops, F.text == BTN_ADMIN_RECENT)
     dp.message.register(btn_update_import, lambda m: m.text == BTN_ADMIN_IMPORT)
     dp.message.register(btn_test_import, lambda m: m.text == BTN_ADMIN_IMPORT_TEST)
     dp.message.register(btn_schedule_list, lambda m: m.text == BTN_ADMIN_SCHEDULES)

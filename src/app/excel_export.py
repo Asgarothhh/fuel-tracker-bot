@@ -14,12 +14,13 @@ from src.app.models import FuelOperation, User, ConfirmationHistory
 
 logger = logging.getLogger(__name__)
 
-EXPORT_DIR = Path(__file__).parent.parent.parent / "exports"
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+EXPORT_DIR = BASE_DIR / "exports"
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 MASTER_FILE = EXPORT_DIR / "Fuel_Report_Master.xlsx"
 
 SHEET_CARDS = "Заправки_по_картам"
-SHEET_DISPUTED = "Заправки_спорные"
+SHEET_DISPUTED = "Спорные заправки"
 SHEET_PERSONAL = "Заправки_личные_средства"
 SHEET_REF = "Справочники"
 
@@ -128,34 +129,31 @@ def _operation_row(db, op: FuelOperation) -> list:
     ]
 
 
-def _ensure_workbook(path: Path):
-    if not path.exists():
-        wb = Workbook()
-        ws0 = wb.active
-        ws0.title = SHEET_CARDS
-        ws0.append(HEADERS)
-        wb.create_sheet(SHEET_DISPUTED)
-        wb[SHEET_DISPUTED].append(HEADERS)
-        wb.create_sheet(SHEET_PERSONAL)
-        wb[SHEET_PERSONAL].append(HEADERS)
-        wb.create_sheet(SHEET_REF)
-        wb[SHEET_REF].append(["Справочник", "Значение"])
-        wb[SHEET_REF].append(["Обновлено", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")])
-        return wb
+def _ensure_workbook(path: Path) -> Workbook:
+    """Гарантирует существование файла и ВСЕХ листов в нем."""
+    wb = None
+    if path.exists():
+        try:
+            wb = load_workbook(path)
+        except Exception as e:
+            logger.error(f"Не удалось открыть существующий файл: {e}")
 
-    wb = load_workbook(path)
-    if SHEET_CARDS not in wb.sheetnames:
-        ws = wb.create_sheet(SHEET_CARDS)
-        ws.append(HEADERS)
-    if SHEET_DISPUTED not in wb.sheetnames:
-        ws = wb.create_sheet(SHEET_DISPUTED)
-        ws.append(HEADERS)
-    if SHEET_PERSONAL not in wb.sheetnames:
-        ws = wb.create_sheet(SHEET_PERSONAL)
-        ws.append(HEADERS)
-    if SHEET_REF not in wb.sheetnames:
-        ws = wb.create_sheet(SHEET_REF)
-        ws.append(["Справочник", "Значение"])
+    if wb is None:
+        wb = Workbook()
+        if "Sheet" in wb.sheetnames:
+            wb.remove(wb["Sheet"])
+
+    # Проверяем каждый лист из списка необходимых
+    required_sheets = [SHEET_CARDS, SHEET_PERSONAL, SHEET_DISPUTED, SHEET_REF]
+    changed = False
+    for name in required_sheets:
+        if name not in wb.sheetnames:
+            ws = wb.create_sheet(name)
+            ws.append(HEADERS)
+            changed = True
+
+    if changed or not path.exists():
+        wb.save(path)
     return wb
 
 
@@ -216,3 +214,51 @@ def export_to_excel_final(op_id: int) -> None:
         except Exception as e:
             logger.exception("[excel] ошибка записи op_id=%s: %s", op_id, e)
             raise
+
+
+def export_operation_to_excel(operation_id: int):
+    with get_db_session() as db:
+        op = db.query(FuelOperation).get(operation_id)
+        if not op:
+            return
+
+        st = op.status
+
+        # 1. Проверяем, является ли заправка спорной
+        is_disputed = st in ("requires_manual", "rejected_by_other", "import_error", "disputed")
+
+        if is_disputed:
+            if getattr(op, "exported_disputed_excel", False):
+                return
+            sheet_name = SHEET_DISPUTED
+
+        elif st == "confirmed":
+            if getattr(op, "exported_to_excel", False):
+                return
+            sheet_name = SHEET_CARDS if op.source == "api" else SHEET_PERSONAL
+
+        else:
+            # Пропускаем статусы loaded, pending и т.д.
+            return
+
+        row_data = _operation_row(db, op)
+
+        try:
+            wb = _ensure_workbook(MASTER_FILE)
+            ws = wb[sheet_name]
+
+            # Добавляем строку
+            ws.append(row_data)
+
+            # Ставим отметку об экспорте
+            if is_disputed:
+                op.exported_disputed_excel = True
+            else:
+                op.exported_to_excel = True
+
+            wb.save(MASTER_FILE)
+            db.commit()
+            logger.info(f"✅ Операция {operation_id} записана в лист {sheet_name}")
+
+        except Exception as e:
+            logger.error(f"❌ Ошибка экспорта в Excel: {e}")
