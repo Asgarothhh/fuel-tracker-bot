@@ -360,14 +360,18 @@ async def cmd_run_import_now(message: types.Message):
                     .all()
                 )
                 for op_id, doc_number, date_time, api_data in recent_ops:
-                    api = api_data or {}
+                    # Важно: api_data может быть строкой или словарем в зависимости от настроек SQLAlchemy
+                    api = api_data if isinstance(api_data, dict) else {}
+
+                    # Безопасно собираем данные, чтобы не было ошибок типов
                     recent_ops_raw.append({
                         "id": op_id,
-                        "doc": doc_number or api.get("docNumber") or api.get("doc_number") or "—",
-                        "dt": date_time.strftime("%d.%m.%Y %H:%M") if date_time else api.get("dateTimeIssue") or "—",
-                        "card": api.get("cardNumber") or api.get("card_number") or api.get("card") or "—",
-                        "azs": api.get("azsNumber") or api.get("azs") or "—",
-                        "qty": api.get("productQuantity") or api.get("quantity") or "—",
+                        "doc": str(doc_number or api.get("docNumber") or api.get("doc_number") or "—"),
+                        "dt": date_time.strftime("%d.%m.%Y %H:%M") if date_time else str(
+                            api.get("dateTimeIssue") or "—"),
+                        "card": str(api.get("cardNumber") or api.get("card_number") or api.get("card") or "—"),
+                        "azs": str(api.get("azsNumber") or api.get("azs") or "—"),
+                        "qty": str(api.get("productQuantity") or api.get("quantity") or "—"),
                     })
 
             # РАССЫЛКА (вне блоков сессий БД)
@@ -390,9 +394,15 @@ async def cmd_run_import_now(message: types.Message):
                         ]
                     )
                     try:
-                        await message.bot.send_message(admin["tg_id"], text, reply_markup=kb, parse_mode="Markdown")
+                        # Используем bot.send_message напрямую через объект message
+                        await message.bot.send_message(
+                            chat_id=admin["tg_id"],
+                            text=text,
+                            reply_markup=kb,
+                            parse_mode="Markdown"
+                        )
                     except Exception as e:
-                        logger.warning("Не удалось уведомить админа ID %s: %s", admin["id"], e)
+                        logger.warning(f"Не удалось уведомить админа {admin['tg_id']}: {e}")
 
         await message.reply(f"✅ Импорт завершён.\nНовых операций в базе: {new_count}")
 
