@@ -45,10 +45,9 @@ ADMIN_HELP_TEXT = (
     "/users — список, /generate_code id, /export_codes\n\n"
     "*Операции:*\n"
     "• «Неподтверждённые» — очередь.\n"
-    "/assign_op [op_id] [user_id]\n\n"  # ИСПРАВЛЕНЫ СКОБКИ ЗДЕСЬ
+    "/assign_op [op_id] [user_id]\n\n"
     "• «Экспорт в Excel» — выгрузка всех операций в файл."
 )
-
 
 @require_permission("admin:manage")
 async def cmd_admin_help(message: types.Message):
@@ -214,6 +213,7 @@ async def btn_export_excel(message: types.Message):
         caption=f"✅ Отчет готов. Выгружено {len(operations)} записей."
     )
 
+
 @require_permission("admin:manage")
 async def cmd_run_import_now_dry(message: types.Message):
     from src.app.jobs import run_import_job
@@ -251,7 +251,11 @@ async def cmd_run_import_now(message: types.Message):
 
         with get_db_session() as db:
             for op in ops:
-                dt_raw = op.get("date_time") or op.get("dateTimeIssue")
+                # 1. Безопасно достаем вложенные словари
+                op_row = op.get("row") if isinstance(op.get("row"), dict) else {}
+                op_card = op.get("card") if isinstance(op.get("card"), dict) else {}
+                # 2. Ищем дату (теперь проверяем и в корне, и в row)
+                dt_raw = op.get("date_time") or op.get("dateTimeIssue") or op_row.get("dateTimeIssue")
                 dt_obj = None
                 if dt_raw:
                     try:
@@ -259,14 +263,17 @@ async def cmd_run_import_now(message: types.Message):
                     except Exception:
                         pass
 
-                doc_raw = op.get("doc_number") or op.get("docNumber")
+                # 3. Ищем чек (теперь проверяем и в корне, и в row)
+                doc_raw = op.get("doc_number") or op.get("docNumber") or op_row.get("docNumber")
                 doc = str(doc_raw).strip() if doc_raw is not None else None
-
-                # Извлекаем данные
-                driver_name = op.get("driverName") or op.get("driver_name")
-                card_num = op.get("cardNumber") or op.get("card_number") or op.get("card")
+                # 4. Ищем остальные данные (с учетом вложенности)
+                driver_name = op.get("driverName") or op.get("driver_name") or op_row.get("driverName")
+                card_num = op.get("cardNumber") or op.get("card_number") or op_card.get("cardNumber")
+                if not card_num and isinstance(op.get("card"), (str, int)):
+                    card_num = op.get("card")
                 if card_num: card_num = str(card_num).strip()
-                car_plate = op.get("carNum") or op.get("car_num") or op.get("car")
+
+                car_plate = op.get("carNum") or op.get("car_num") or op.get("car") or op_row.get("carNum")
                 car_plate_norm = str(car_plate).strip().upper() if car_plate else None
 
                 # ПУНКТ 6: АВТО-ДОБАВЛЕНИЕ ПОЛЬЗОВАТЕЛЕЙ ИЗ API (ДО ПРОВЕРКИ НА ДУБЛИ!)
@@ -360,18 +367,32 @@ async def cmd_run_import_now(message: types.Message):
                     .all()
                 )
                 for op_id, doc_number, date_time, api_data in recent_ops:
-                    # Важно: api_data может быть строкой или словарем в зависимости от настроек SQLAlchemy
                     api = api_data if isinstance(api_data, dict) else {}
 
-                    # Безопасно собираем данные, чтобы не было ошибок типов
+                    # Извлекаем вложенные данные
+                    row_data = api.get("row") if isinstance(api.get("row"), dict) else {}
+                    card_data = api.get("card") if isinstance(api.get("card"), dict) else {}
+
+                    card_num = api.get("cardNumber") or api.get("card_number") or card_data.get("cardNumber")
+                    if not card_num and isinstance(api.get("card"), (str, int)):
+                        card_num = api.get("card")
+
+                    azs = api.get("azsNumber") or api.get("azs") or row_data.get("azsNumber") or row_data.get("azs")
+                    qty = api.get("productQuantity") or api.get("quantity") or row_data.get(
+                        "productQuantity") or row_data.get("quantity")
+                    doc = doc_number or api.get("docNumber") or api.get("doc_number") or row_data.get("row", {}).get(
+                        "docNumber")
+
+                    dt = date_time.strftime("%d.%m.%Y %H:%M") if date_time else (
+                                api.get("dateTimeIssue") or row_data.get("dateTimeIssue") or "—")
+
                     recent_ops_raw.append({
                         "id": op_id,
-                        "doc": str(doc_number or api.get("docNumber") or api.get("doc_number") or "—"),
-                        "dt": date_time.strftime("%d.%m.%Y %H:%M") if date_time else str(
-                            api.get("dateTimeIssue") or "—"),
-                        "card": str(api.get("cardNumber") or api.get("card_number") or api.get("card") or "—"),
-                        "azs": str(api.get("azsNumber") or api.get("azs") or "—"),
-                        "qty": str(api.get("productQuantity") or api.get("quantity") or "—"),
+                        "doc": str(doc or "—"),
+                        "dt": str(dt),
+                        "card": str(card_num or "—"),
+                        "azs": str(azs or "—"),
+                        "qty": str(qty or "—"),
                     })
 
             # РАССЫЛКА (вне блоков сессий БД)
