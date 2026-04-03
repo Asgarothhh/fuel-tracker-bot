@@ -8,7 +8,8 @@ from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from src.app.bot.notifications import send_operation_to_user
-
+from aiogram.filters import CommandStart
+from sqlalchemy import cast, String
 from src.app.db import get_db_session
 from src.app.models import User, FuelOperation, Car, ConfirmationHistory
 from src.app.permissions import user_has_permission, require_permission
@@ -34,6 +35,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+class RegistrationStates(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_card = State()
+
+
 class ReceiptStates(StatesGroup):
     waiting_for_photo = State()
     waiting_for_confirmation = State()
@@ -57,6 +64,94 @@ USER_HELP_TEXT = (
 )
 
 
+async def cmd_start(message: types.Message, state: FSMContext):
+    # Сбрасываем любые текущие состояния на всякий случай
+    await state.clear()
+
+    with get_db_session() as db:
+        # 1. Ищем пользователя в базе
+        user = db.query(User).filter(User.telegram_id == message.from_user.id).first()
+
+        # 2. Если пользователь уже существует
+        if user:
+            if user.active:
+                # Проверяем на права администратора
+                is_admin = user_has_permission(db, message.from_user.id, "admin:manage")
+
+                if is_admin:
+                    await message.reply(
+                        "👑 **Панель администратора**. Кнопки ниже или команды в меню бота.",
+                        reply_markup=reply_keyboard_admin(),  # вызываем функцию клавиатуры
+                        parse_mode="Markdown",
+                    )
+                else:
+                    await message.reply(
+                        f"✅ С возвращением, {user.full_name}!",
+                        reply_markup=reply_keyboard_user,  # используем твою переменную клавиатуры
+                        parse_mode="Markdown",
+                    )
+            else:
+                # Пользователь есть, но не активирован
+                await message.reply(
+                    "⏳ Ваш аккаунт ожидает активации администратором.\n"
+                    "Если у вас есть код доступа, введите его сейчас."
+                )
+            return
+
+    # 3. Если пользователя нет в базе — запускаем регистрацию
+    await message.reply(
+        "👋 **Добро пожаловать!**\n\nДля начала работы необходимо зарегистрироваться.\n"
+        "Введите ваше **ФИО** (полностью):",
+        parse_mode="Markdown"
+    )
+    await state.set_state(RegistrationStates.waiting_for_name)
+
+
+async def process_reg_name(message: types.Message, state: FSMContext):
+    await state.update_data(full_name=message.text.strip())
+    await message.reply("Теперь введите номер вашей топливной карты (только цифры):")
+    await state.set_state(RegistrationStates.waiting_for_card)
+
+
+async def process_reg_card(message: types.Message, state: FSMContext):
+    card_num = message.text.strip()
+    if not card_num.isdigit():
+        await message.reply("Номер карты должен состоять только из цифр. Попробуйте снова:")
+        return
+
+    data = await state.get_data()
+    full_name = data['full_name']
+
+    with get_db_session() as db:
+        # Ищем, нет ли уже такого пользователя (созданного через API импорт)
+        existing_user = db.query(User).filter(
+            (User.full_name.ilike(full_name)) |
+            (cast(User.cards, String).like(f"%{card_num}%"))
+        ).first()
+
+        if existing_user and not existing_user.telegram_id:
+            existing_user.telegram_id = message.from_user.id
+            cards = list(existing_user.cards or [])
+            if card_num not in cards: cards.append(card_num)
+            existing_user.cards = cards
+        elif not existing_user:
+            new_user = User(
+                full_name=full_name,
+                telegram_id=message.from_user.id,
+                cards=[card_num],
+                active=False
+            )
+            db.add(new_user)
+        else:
+            await message.reply("Пользователь с такими данными уже зарегистрирован.")
+            await state.clear()
+            return
+
+        db.commit()
+        await message.reply("Регистрация завершена! Ожидайте активации администратором.")
+    await state.clear()
+
+
 async def callback_fuel_card_reject(call: types.CallbackQuery, state: FSMContext):
     operation_id = int(call.data.split("_")[-1])
 
@@ -67,7 +162,8 @@ async def callback_fuel_card_reject(call: types.CallbackQuery, state: FSMContext
     await call.message.answer("Понял. Напишите, пожалуйста, ФИО сотрудника, который заправлялся по этой карте?")
     await call.answer()
 
-async def cmd_start(message: types.Message):
+
+async def old_cmd_start(message: types.Message):
     with get_db_session() as db:
         is_admin = user_has_permission(db, message.from_user.id, "admin:manage")
 
@@ -138,40 +234,66 @@ async def cmd_link(message: types.Message):
         return
 
     code = args.split()[0]
+
     with get_db_session() as db:
+        # 1. Проверяем и "гасим" код в базе
         ok, result = verify_and_consume_code(db, code, message.from_user.id)
+
         if not ok:
             reason = result
-            user_row = None
+            # ... (логика обработки ошибок остается прежней)
+            if reason == "invalid_or_used":
+                await message.reply("Код неверен или уже использован.")
+            elif reason == "expired":
+                await message.reply("Код просрочен.")
+            elif reason == "already_linked_to_other":
+                await message.reply("Эта запись уже привязана к другому Telegram.")
+            else:
+                await message.reply("Ошибка привязки.")
+            return
+
+        # 2. Получаем ID пользователя из результата проверки кода
+        user_id = None
+        if isinstance(result, dict) and "user_id" in result:
+            user_id = result["user_id"]
+        elif hasattr(result, "user_id"):
+            user_id = result.user_id
+
+        if not user_id:
+            await message.reply("Ошибка: запись пользователя не найдена.")
+            return
+
+        # 3. Загружаем объект пользователя для редактирования
+        user = db.query(User).filter(User.id == user_id).first()
+
+        if user:
+            # АКТИВАЦИЯ
+            user.active = True
+
+            # НАЗНАЧЕНИЕ РОЛИ (Обязательно!)
+            # Если у тебя в базе роль обычного пользователя имеет ID 1, ставь 1.
+            # Без role_id Middleware будет считать, что у юзера нет прав.
+            if not user.role_id:
+                user.role_id = 1
+
+                # СОХРАНЕНИЕ
+            db.commit()
+
+            # Подготовка данных для ответа
+            full_name = user.full_name
+            cards_s = ", ".join(user.cards or []) or "—"
+            cars_s = ", ".join(user.cars or []) or "—"  # исправлено: берем из user.cars
+
+            await message.reply(
+                f"✅ **Аккаунт успешно активирован!**\n\n"
+                f"ФИО: {full_name}\n"
+                f"Карты: {cards_s}\n"
+                f"Авто: {cars_s}",
+                reply_markup=reply_keyboard_user(),  # Сразу даем кнопки пользователя
+                parse_mode="Markdown"
+            )
         else:
-            user_id = None
-            if isinstance(result, dict) and "user_id" in result:
-                user_id = result["user_id"]
-            elif hasattr(result, "user_id"):
-                user_id = result.user_id
-            user_row = None
-            if user_id:
-                user_row = db.query(User.id, User.full_name, User.cards, User.cars).filter(User.id == user_id).first()
-
-    if not ok:
-        if reason == "invalid_or_used":
-            await message.reply("Код неверен или уже использован.")
-        elif reason == "expired":
-            await message.reply("Код просрочен. Запросите новый у администратора.")
-        elif reason == "already_linked_to_other":
-            await message.reply("Эта запись уже привязана к другому Telegram.")
-        else:
-            await message.reply("Ошибка привязки. Обратитесь к администратору.")
-        return
-
-    if not user_row:
-        await message.reply("Привязка выполнена, но не удалось загрузить профиль.")
-        return
-
-    _, full_name, cards, cars = user_row
-    cards_s = ", ".join(cards or []) or "—"
-    cars_s = ", ".join(cars or []) or "—"
-    await message.reply(f"Готово.\nФИО: {full_name}\nКарты: {cards_s}\nАвто: {cars_s}")
+            await message.reply("Привязка выполнена, но профиль не найден в базе.")
 
 
 async def cmd_user_help(message: types.Message):
@@ -629,6 +751,9 @@ async def process_add_new_car(message: types.Message, state: FSMContext):
 
 
 def register_user_handlers(dp):
+    dp.message.register(cmd_start, CommandStart())
+    dp.message.register(process_reg_name, RegistrationStates.waiting_for_name)
+    dp.message.register(process_reg_card, RegistrationStates.waiting_for_card)
     dp.message.register(cmd_start, Command(commands=["start"]))
     dp.message.register(cmd_link, Command(commands=["link"]))
     dp.message.register(cmd_myprofile, Command(commands=["myprofile"]))
