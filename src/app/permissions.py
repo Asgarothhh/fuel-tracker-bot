@@ -45,21 +45,36 @@ class ActiveUserMiddleware(BaseMiddleware):
             data: Dict[str, Any]
     ) -> Any:
         user_tg_id = event.from_user.id
+        state = data.get("state")
 
+        # 1. ПОЛНОЕ ИСКЛЮЧЕНИЕ ДЛЯ РЕГИСТРАЦИИ И АКТИВАЦИИ
+        current_state = await state.get_state() if state else None
+
+        # Проверяем, не вводит ли пользователь команду активации
+        is_command = False
+        if isinstance(event, Message) and event.text:
+            # Разрешаем /start и /link проходить сквозь блок деактивации
+            if event.text.startswith('/start') or event.text.startswith('/link'):
+                is_command = True
+
+        # Если в процессе регистрации ИЛИ вводит команду — пропускаем к хендлерам
+        if is_command or (current_state and current_state.startswith("RegistrationStates:")):
+            return await handler(event, data)
+
+        # 2. ОБЫЧНАЯ ПРОВЕРКА БАЗЫ
         with get_db_session() as db:
-            # Ищем пользователя по telegram_id
             user = db.query(User).filter(User.telegram_id == user_tg_id).first()
 
-            # Если пользователь найден, но деактивирован — блокируем
+            # Если юзер есть, но не активен — стоп (кроме случаев выше)
             if user and not user.active:
                 if isinstance(event, Message):
-                    await event.answer("❌ Ваш аккаунт деактивирован. Доступ к боту закрыт.")
-                elif isinstance(event, CallbackQuery):
-                    await event.answer("❌ Аккаунт деактивирован.", show_alert=True)
-                return  # Прерываем выполнение, хэндлеры не сработают
+                    await event.answer("❌ Ваш аккаунт ожидает активации. Введите код: `/link ваш_код`",
+                                       parse_mode="Markdown")
+                return
 
-        # Если всё ок — пропускаем запрос дальше
         return await handler(event, data)
+
+
 def require_permission(permission_name: str):
     """
     Проверка прав для Message и CallbackQuery.
