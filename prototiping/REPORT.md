@@ -34,9 +34,6 @@
 | 3 | `auth_permissions` | Права и токены привязки | 2 | 2 | 17.8 | **да** |
 | 4 | `excel_ocr` | Схема чека и строка Excel | 2 | 2 | 5.16 | **да** |
 
-### Цепочка (одна строка)
-
-`belorusneft_parse` ✓ (0.03 ms) → `plates_import` ✓ (38.64 ms) → `auth_permissions` ✓ (17.8 ms) → `excel_ocr` ✓ (5.16 ms)
 
 ### Порядок выполнения
 
@@ -45,26 +42,6 @@
 3. **auth_permissions** — успех (17.8 ms): _Права и токены привязки_
 4. **excel_ocr** — успех (5.16 ms): _Схема чека и строка Excel_
 
-### Схема (ASCII)
-
-```text
-  [старт]
-      |
-      v
-  +-- belorusneft_parse  [OK]  0.03 ms
-      |
-      v
-  +-- plates_import  [OK]  38.64 ms
-      |
-      v
-  +-- auth_permissions  [OK]  17.8 ms
-      |
-      v
-  +-- excel_ocr  [OK]  5.16 ms
-      |
-      v
-  [конец]
-```
 
 ### Диаграмма
 
