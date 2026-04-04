@@ -556,8 +556,8 @@ Ba (^.
 *Файл сформирован автоматически.*
 
 - Шаблон: `prototiping/reporting/template.md`
-- Сборка: `PYTHONPATH=. python -m prototiping`
-- HTML-граф: `PYTHONPATH=. python -m prototiping.tools.graph_preview` → `prototiping/output/graph_preview.html`
-- Тесты: `PYTHONPATH=. pytest prototiping` (отчёт в конце сессии; отключить: `--no-prototype-report`)
+- Сборка: `python -m prototiping`
+- HTML-граф: `python -m prototiping.tools.graph_preview` → `prototiping/output/graph_preview.html`
+- Тесты: `pytest prototiping` (отчёт в конце сессии; отключить: `--no-prototype-report`)
 
 **Структура каталога `prototiping/`:** `graph/` — LangGraph и трассировка; `checks/` — сценарии; `db/` — SQLite-хелперы и снимки; `reporting/` — шаблон и сборка отчёта; `lib/` — пути и `.env`; `tools/` — вспомогательные скрипты; `tests/` — pytest; `export/`, `report_assets/` — данные и картинки для отчёта.
