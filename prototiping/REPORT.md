@@ -66,7 +66,7 @@
   [конец]
 ```
 
-### Диаграмма Mermaid (компактная)
+### Диаграмма
 
 ```mermaid
 %% Автогенерация prototiping.tools.graph_preview
