@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from src.app.bot.keyboards import BTN_ADMIN_DISPUTED, BTN_ADMIN_RECENT
-
+from src.app.bot.handlers.user import send_operation_to_user
 from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
@@ -337,22 +337,20 @@ async def cmd_run_import_now(message: types.Message):
                 if car_plate_norm: new_op.car_from_api = car_plate_norm
 
                 db.add(new_op)
+                db.flush()
                 new_count += 1
+                # ОТПРАВКА ВОДИТЕЛЮ (если он найден и привязан к TG)
+                if presumed_user and presumed_user.telegram_id:
+                    try:
+                        # Передаем bot, ID телеграма и ID созданной операции
+                        await send_operation_to_user(message.bot, presumed_user.telegram_id, new_op.id)
+                    except Exception as e:
+                        logging.error(f"Ошибка отправки водителю {presumed_user.telegram_id}: {e}")
 
             db.commit()
 
         # СОБИРАЕМ АДМИНОВ В ПЛОСКИЙ СПИСОК (чтобы избежать DetachedInstanceError)
-        admin_info = []
-        with get_db_session() as db2:
-            all_users_with_tg = db2.query(User).filter(User.telegram_id != None).all()
-            for u in all_users_with_tg:
-                try:
-                    if user_has_permission(db2, u.telegram_id, "admin:manage"):
-                        admin_info.append({"id": u.id, "tg_id": u.telegram_id})
-                except Exception:
-                    continue
-
-        if new_count > 0 and admin_info:
+        if new_count > 0:
             recent_ops_raw = []
             with get_db_session() as db3:
                 recent_ops = (
@@ -368,64 +366,40 @@ async def cmd_run_import_now(message: types.Message):
                 )
                 for op_id, doc_number, date_time, api_data in recent_ops:
                     api = api_data if isinstance(api_data, dict) else {}
+                    row_data = api.get("row", {})
+                    card_data = api.get("card", {})
 
-                    # Извлекаем вложенные данные
-                    row_data = api.get("row") if isinstance(api.get("row"), dict) else {}
-                    card_data = api.get("card") if isinstance(api.get("card"), dict) else {}
-
+                    # Извлекаем данные (учитывая разные форматы API)
                     card_num = api.get("cardNumber") or api.get("card_number") or card_data.get("cardNumber")
-                    if not card_num and isinstance(api.get("card"), (str, int)):
-                        card_num = api.get("card")
-
-                    azs = api.get("azsNumber") or api.get("azs") or row_data.get("azsNumber") or row_data.get("azs")
-                    qty = api.get("productQuantity") or api.get("quantity") or row_data.get(
-                        "productQuantity") or row_data.get("quantity")
-                    doc = doc_number or api.get("docNumber") or api.get("doc_number") or row_data.get("row", {}).get(
-                        "docNumber")
-
-                    dt = date_time.strftime("%d.%m.%Y %H:%M") if date_time else (
-                                api.get("dateTimeIssue") or row_data.get("dateTimeIssue") or "—")
+                    azs = api.get("azsNumber") or api.get("azs") or row_data.get("azsNumber")
+                    qty = api.get("productQuantity") or api.get("quantity") or row_data.get("productQuantity")
+                    doc = doc_number or api.get("docNumber")
+                    dt = date_time.strftime("%d.%m.%Y %H:%M") if date_time else "—"
 
                     recent_ops_raw.append({
-                        "id": op_id,
-                        "doc": str(doc or "—"),
-                        "dt": str(dt),
-                        "card": str(card_num or "—"),
-                        "azs": str(azs or "—"),
-                        "qty": str(qty or "—"),
+                        "id": op_id, "doc": str(doc or "—"), "dt": str(dt),
+                        "card": str(card_num or "—"), "azs": str(azs or "—"), "qty": str(qty or "—"),
                     })
 
-            # РАССЫЛКА (вне блоков сессий БД)
-            for admin in admin_info:
-                for op in recent_ops_raw:
-                    text = (
-                        "⛽️ **Новая операция из API:**\n"
-                        f"ID: `{op['id']}`\n"
-                        f"Дата: {op['dt']}\n"
-                        f"Карта: `{op['card']}`\n"
-                        f"АЗС: {op['azs']}\n"
-                        f"Чек: {op['doc']}\n"
-                        f"Кол-во: {op['qty']} л."
-                    )
-                    kb = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_op:{op['id']}")],
-                            [InlineKeyboardButton(text="👤 Назначить", callback_data=f"assign_op:{op['id']}")],
-                            [InlineKeyboardButton(text="⚠️ Спорная", callback_data=f"mark_dispute:{op['id']}")],
-                        ]
-                    )
-                    try:
-                        # Используем bot.send_message напрямую через объект message
-                        await message.bot.send_message(
-                            chat_id=admin["tg_id"],
-                            text=text,
-                            reply_markup=kb,
-                            parse_mode="Markdown"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Не удалось уведомить админа {admin['tg_id']}: {e}")
+            # Отправляем чеки ТОЛЬКО инициатору (вам)
+            for op in recent_ops_raw:
+                text = (
+                    "⛽️ **Новая операция из API:**\n"
+                    f"ID: `{op['id']}`\n"
+                    f"Дата: {op['dt']}\n"
+                    f"Карта: `{op['card']}`\n"
+                    f"АЗС: {op['azs']}\n"
+                    f"Чек: {op['doc']}\n"
+                    f"Кол-во: {op['qty']} л."
+                )
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"confirm_op:{op['id']}")],
+                    [InlineKeyboardButton(text="👤 Назначить", callback_data=f"assign_op:{op['id']}")],
+                    [InlineKeyboardButton(text="⚠️ Спорная", callback_data=f"mark_dispute:{op['id']}")],
+                ])
+                await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
-        await message.reply(f"✅ Импорт завершён.\nНовых операций в базе: {new_count}")
+        await message.reply(f"✅ Импорт завершён.\nНовых заправок в базе: {new_count}")
 
     except Exception as e:
         logger.exception("run_import_now")
