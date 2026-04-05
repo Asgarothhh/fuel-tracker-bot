@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from src.app.bot.keyboards import BTN_ADMIN_DISPUTED, BTN_ADMIN_RECENT
-
+from src.app.bot.handlers.user import send_operation_to_user
 from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
@@ -337,7 +337,15 @@ async def cmd_run_import_now(message: types.Message):
                 if car_plate_norm: new_op.car_from_api = car_plate_norm
 
                 db.add(new_op)
+                db.flush()
                 new_count += 1
+                # ОТПРАВКА ВОДИТЕЛЮ (если он найден и привязан к TG)
+                if presumed_user and presumed_user.telegram_id:
+                    try:
+                        # Передаем bot, ID телеграма и ID созданной операции
+                        await send_operation_to_user(message.bot, presumed_user.telegram_id, new_op.id)
+                    except Exception as e:
+                        logging.error(f"Ошибка отправки водителю {presumed_user.telegram_id}: {e}")
 
             db.commit()
 
