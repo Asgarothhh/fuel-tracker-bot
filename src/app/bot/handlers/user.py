@@ -1,6 +1,8 @@
 import datetime
+import hashlib
 import logging
 import os
+import re
 from pathlib import Path
 
 from aiogram import F, types
@@ -20,7 +22,9 @@ from src.app.bot.keyboards import (
     BTN_USER_PROFILE,
     BTN_USER_SEND_CHECK,
     get_fuel_card_confirm_kb,
+    get_manual_receipt_cancel_kb,
     get_ocr_confirm_kb,
+    get_ocr_edit_choice_kb,
     get_personal_car_pick_kb,
     reply_keyboard_admin,
     reply_keyboard_user,
@@ -36,6 +40,7 @@ from src.app.plate_util import find_cars_by_normalized_plate, normalize_plate
 from src.app.tokens import verify_and_consume_code
 from src.app.welcome_store import mark_welcome_shown, was_welcome_shown
 from src.ocr.engine import SmartFuelOCR
+from src.ocr.schemas import ReceiptData
 
 logger = logging.getLogger("bot.user")
 
@@ -48,6 +53,7 @@ class RegistrationStates(StatesGroup):
 class ReceiptStates(StatesGroup):
     waiting_for_photo = State()
     waiting_for_confirmation = State()
+    waiting_for_manual_receipt_text = State()
     waiting_for_personal_car_plate = State()
     waiting_for_personal_fueler = State()
     waiting_for_real_fueler = State()  # Кто заправлялся (ФИО) — спор по карте
@@ -411,6 +417,119 @@ async def handle_receipt_photo(message: types.Message, state: FSMContext):
         await msg_wait.delete()
 
 
+MANUAL_RECEIPT_HELP = """⌨️ **Ввод данных чека вручную**
+
+Отправьте **одним сообщением** несколько строк в формате `Название: значение` (можно скопировать шаблон и подставить свои данные):
+
+```
+Топливо: АИ-95
+Литры: 45.2
+Сумма: 125.50
+Чек: 123456
+АЗС: 12
+Дата: 05.04.2026
+Время: 14:30
+```
+
+**Обязательно:** топливо, литры, номер чека, дата, время.  
+**По желанию:** сумма, АЗС.
+
+Допустимы подписи на латинице: `Fuel`, `Quantity`, `Sum`, `Doc`, `AZS`, `Date`, `Time`."""
+
+
+def _normalize_manual_key(key: str) -> str:
+    k = key.strip().lower().replace("ё", "е")
+    k = re.sub(r"\s+", " ", k)
+    return k
+
+
+def _parse_manual_receipt_text(text: str) -> tuple[dict | None, str]:
+    """
+    Разбор многострочного ввода. Возвращает (поля для ReceiptData, сообщение об ошибке).
+    """
+    raw: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, _, rest = line.partition(":")
+        nk = _normalize_manual_key(key)
+        val = rest.strip()
+        if not val:
+            continue
+
+        if nk in ("топливо", "fuel", "вид топлива", "вид"):
+            raw["fuel_type"] = val
+        elif nk in ("литры", "л", "quantity", "количество", "кол-во", "объем", "объём"):
+            raw["quantity"] = val.replace(",", ".")
+        elif nk in ("сумма", "итог", "total", "sum", "стоимость", "к оплате"):
+            raw["total_sum"] = val.replace(",", ".")
+        elif nk in ("чек", "номер чека", "doc", "документ"):
+            raw["doc_number"] = val
+        elif nk in ("азс", "azs", "станция", "номер азс"):
+            raw["azs_number"] = val
+        elif nk in ("дата", "date"):
+            raw["date"] = val
+        elif nk in ("время", "time"):
+            raw["time"] = val
+        elif nk in ("колонка", "трк", "pump"):
+            raw["pump_no"] = val
+        elif nk in ("адрес", "address"):
+            raw["azs_address"] = val
+
+    missing = [f for f in ("fuel_type", "quantity", "doc_number", "date", "time") if not raw.get(f)]
+    if missing:
+        return None, "Не хватает полей: " + ", ".join(missing) + ". Сверьтесь с шаблоном."
+
+    try:
+        qty = float(str(raw["quantity"]).replace(",", "."))
+    except ValueError:
+        return None, "Поле «Литры» должно быть числом (например 45.2)."
+
+    date_s = raw["date"].strip()
+    time_s = raw["time"].strip()
+
+    try:
+        datetime.datetime.strptime(date_s, "%d.%m.%Y")
+    except ValueError:
+        return None, "Дата должна быть в формате ДД.ММ.ГГГГ (например 05.04.2026)."
+
+    parsed_time = False
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            datetime.datetime.strptime(time_s, fmt)
+            if fmt == "%H:%M":
+                time_s = time_s + ":00"
+            parsed_time = True
+            break
+        except ValueError:
+            continue
+    if not parsed_time:
+        return None, "Время укажите как ЧЧ:ММ или ЧЧ:ММ:СС (например 14:30)."
+
+    out = {
+        "fuel_type": raw["fuel_type"],
+        "quantity": qty,
+        "doc_number": str(raw["doc_number"]).strip(),
+        "date": date_s,
+        "time": time_s,
+        "total_sum": str(raw.get("total_sum") or "") or None,
+        "azs_number": str(raw.get("azs_number") or "") or None,
+        "pump_no": str(raw.get("pump_no") or "") or None,
+        "azs_address": str(raw.get("azs_address") or "") or None,
+    }
+    return out, ""
+
+
+def _manual_receipt_datetime(fields: dict) -> datetime.datetime:
+    time_part = fields["time"]
+    if len(time_part) == 5:
+        time_part = time_part + ":00"
+    return datetime.datetime.strptime(f"{fields['date']} {time_part}", "%d.%m.%Y %H:%M:%S")
+
+
 def _can_edit_personal_receipt_op(db, op: FuelOperation, telegram_id: int) -> bool:
     if not op or op.source != "personal_receipt":
         return False
@@ -444,7 +563,41 @@ async def callback_ocr_confirm(call: types.CallbackQuery, state: FSMContext):
 
 
 async def callback_ocr_edit(call: types.CallbackQuery, state: FSMContext):
-    """ТЗ 9.4 — исправить: сбрасываем черновик и просим прислать чек снова."""
+    """ТЗ 9.4 — исправить: выбор «вручную» или «новое фото»."""
+    op_id = int(call.data.split("_")[-1])
+    with get_db_session() as db:
+        op = db.query(FuelOperation).get(op_id)
+        if not _can_edit_personal_receipt_op(db, op, call.from_user.id):
+            await call.answer("Операция недоступна.", show_alert=True)
+            return
+
+    await state.update_data(op_id=op_id)
+    await call.message.edit_text(
+        "✏️ Как исправить данные чека?",
+        reply_markup=get_ocr_edit_choice_kb(op_id),
+    )
+    await call.answer()
+
+
+async def callback_receipt_manual(call: types.CallbackQuery, state: FSMContext):
+    op_id = int(call.data.split("_")[-1])
+    with get_db_session() as db:
+        op = db.query(FuelOperation).get(op_id)
+        if not _can_edit_personal_receipt_op(db, op, call.from_user.id):
+            await call.answer("Операция недоступна.", show_alert=True)
+            return
+
+    await state.update_data(op_id=op_id)
+    await state.set_state(ReceiptStates.waiting_for_manual_receipt_text)
+    await call.message.edit_text(
+        MANUAL_RECEIPT_HELP,
+        parse_mode="Markdown",
+        reply_markup=get_manual_receipt_cancel_kb(op_id),
+    )
+    await call.answer()
+
+
+async def callback_receipt_photo_retry(call: types.CallbackQuery, state: FSMContext):
     op_id = int(call.data.split("_")[-1])
     with get_db_session() as db:
         op = db.query(FuelOperation).get(op_id)
@@ -457,10 +610,85 @@ async def callback_ocr_edit(call: types.CallbackQuery, state: FSMContext):
     await state.set_state(ReceiptStates.waiting_for_photo)
     await state.update_data(op_id=None)
     await call.message.edit_text(
-        "✏️ Черновик сброшен. Сделайте более читаемое фото чека и отправьте его снова "
-        "(кнопка «📸 Отправить чек» или команда /check)."
+        "📸 Черновик удалён. Пришлите **новое фото** чека (кнопка «📸 Отправить чек» или /check).",
+        parse_mode="Markdown",
     )
     await call.answer()
+
+
+async def process_manual_receipt_text(message: types.Message, state: FSMContext):
+    if not message.text or message.text.startswith("/"):
+        await message.answer("Отправьте данные обычным текстом по шаблону (не командой).")
+        return
+
+    data_fsm = await state.get_data()
+    op_id = data_fsm.get("op_id")
+    if not op_id:
+        await state.clear()
+        return
+
+    parsed, err = _parse_manual_receipt_text(message.text)
+    if not parsed:
+        await message.answer(f"❌ {err}\n\nПопробуйте ещё раз.")
+        return
+
+    try:
+        structured = ReceiptData.model_validate(parsed)
+    except Exception as e:
+        await message.answer(f"❌ Не удалось разобрать данные: {e}")
+        return
+
+    body = message.text.strip()
+    manual_hash = "manual:" + hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    try:
+        dt_op = _manual_receipt_datetime(
+            {"date": structured.date or "", "time": structured.time or "00:00:00"}
+        )
+    except ValueError:
+        await message.answer("❌ Ошибка в комбинации дата/время. Проверьте формат.")
+        return
+
+    with get_db_session() as db:
+        op = db.query(FuelOperation).get(op_id)
+        if not _can_edit_personal_receipt_op(db, op, message.from_user.id):
+            await message.answer("Операция недоступна или устарела. Начните с /check.")
+            await state.clear()
+            return
+
+        full_ocr = structured.model_dump()
+        full_ocr["manual_entry"] = True
+        full_ocr["raw_text_debug"] = body
+        full_ocr["image_hash"] = manual_hash
+
+        op.ocr_data = full_ocr
+        op.doc_number = structured.doc_number
+        op.date_time = dt_op
+        op.status = "new"
+        db.commit()
+
+    await state.update_data(op_id=op_id)
+    await state.set_state(ReceiptStates.waiting_for_confirmation)
+
+    text = (
+        f"📋 *Данные чека (вручную):*\n\n"
+        f"⛽ Топливо: {structured.fuel_type or '—'}\n"
+        f"💧 Кол-во: {structured.quantity} л.\n"
+        f"💰 Сумма: {structured.total_sum or '—'}\n"
+        f"🏪 АЗС: {structured.azs_number or '—'}\n"
+        f"🧾 Чек №: {structured.doc_number or '—'}\n"
+        f"📅 Дата и время: {structured.date} {structured.time}\n\n"
+        f"Подтвердите данные или выберите действие:"
+    )
+    await message.answer(text, reply_markup=get_ocr_confirm_kb(op_id), parse_mode="Markdown")
+
+
+async def _hint_manual_not_photo(message: types.Message, state: FSMContext):
+    await message.answer(
+        "Сейчас ожидается **текст** с данными чека по шаблону. "
+        "Для нового фото вернитесь к сообщению с кнопками и выберите «📸 Новое фото» или нажмите «Отменить ввод».",
+        parse_mode="Markdown",
+    )
 
 
 async def callback_select_personal_car(call: types.CallbackQuery, state: FSMContext):
@@ -889,6 +1117,8 @@ def register_user_handlers(dp):
     dp.message.register(btn_admin_home, F.text == BTN_ADMIN_HOME)
     dp.message.register(btn_send_receipt_start, F.text == BTN_USER_SEND_CHECK)
     dp.message.register(handle_receipt_photo, ReceiptStates.waiting_for_photo, F.photo)
+    dp.message.register(process_manual_receipt_text, ReceiptStates.waiting_for_manual_receipt_text, F.text)
+    dp.message.register(_hint_manual_not_photo, ReceiptStates.waiting_for_manual_receipt_text, F.photo)
     dp.message.register(process_personal_car_plate, ReceiptStates.waiting_for_personal_car_plate)
     dp.message.register(process_personal_fueler_name, ReceiptStates.waiting_for_personal_fueler)
     dp.message.register(process_confirmed_car, ReceiptStates.waiting_for_confirmed_car)
@@ -901,6 +1131,8 @@ def register_user_handlers(dp):
     dp.callback_query.register(callback_fuel_card_reject, F.data.startswith("fuel_card_no_"))
     dp.callback_query.register(callback_ocr_confirm, F.data.startswith("ocr_confirm_"))
     dp.callback_query.register(callback_ocr_edit, F.data.startswith("ocr_edit_"))
+    dp.callback_query.register(callback_receipt_manual, F.data.startswith("receipt_manual_"))
+    dp.callback_query.register(callback_receipt_photo_retry, F.data.startswith("receipt_photo_retry_"))
     dp.callback_query.register(callback_ocr_cancel, F.data.startswith("ocr_cancel_"))
     dp.callback_query.register(callback_select_personal_car, F.data.startswith("personal_car_"))
     # dp.message.register(btn_user_profile, lambda m: m.text == BTN_USER_PROFILE)
