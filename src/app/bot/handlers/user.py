@@ -1,7 +1,7 @@
 import datetime
 import os
 from time import timezone
-
+from aiogram.types import FSInputFile
 from aiogram import types
 from aiogram.filters import Command
 from aiogram import Bot
@@ -65,41 +65,50 @@ USER_HELP_TEXT = (
 
 
 async def cmd_start(message: types.Message, state: FSMContext):
-    # Сбрасываем любые текущие состояния на всякий случай
     await state.clear()
 
+    # Путь к баннеру. Убедитесь, что в папке с проектом есть папка assets, а в ней этот файл
+    banner_path = os.path.join("E:/PythonProjects/fuel-tracker-bot/src/app/bot/assets/Frame 1 (2).png")
+
+    if os.path.exists(banner_path):
+        try:
+            await message.answer_photo(
+                photo=FSInputFile(banner_path),
+                caption="⛽️ **Добро пожаловать в систему учета топлива!**",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Ошибка при отправке баннера: {e}")
+
     with get_db_session() as db:
-        # 1. Ищем пользователя в базе
         user = db.query(User).filter(User.telegram_id == message.from_user.id).first()
 
-        # 2. Если пользователь уже существует
         if user:
             if user.active:
-                # Проверяем на права администратора
                 is_admin = user_has_permission(db, message.from_user.id, "admin:manage")
 
                 if is_admin:
                     await message.reply(
                         "👑 **Панель администратора**. Кнопки ниже или команды в меню бота.",
-                        reply_markup=reply_keyboard_admin(),  # вызываем функцию клавиатуры
+                        reply_markup=reply_keyboard_admin(),  # Здесь скобки были — это ГУД
                         parse_mode="Markdown",
                     )
                 else:
                     await message.reply(
                         f"✅ С возвращением, {user.full_name}!",
-                        reply_markup=reply_keyboard_user,  # используем твою переменную клавиатуры
+                        # ВОТ ТУТ БЫЛА ОШИБКА: добавляем скобки ()
+                        reply_markup=reply_keyboard_user(),
                         parse_mode="Markdown",
                     )
             else:
-                # Пользователь есть, но не активирован
                 await message.reply(
                     "⏳ Ваш аккаунт ожидает активации администратором.\n"
                     "Если у вас есть код доступа, введите его сейчас."
                 )
             return
 
-    # 3. Если пользователя нет в базе — запускаем регистрацию
-    await message.reply(
+    # Логика для новых пользователей
+    await message.answer(
         "👋 **Добро пожаловать!**\n\nДля начала работы необходимо зарегистрироваться.\n"
         "Введите ваше **ФИО** (полностью):",
         parse_mode="Markdown"
@@ -139,6 +148,7 @@ async def process_reg_card(message: types.Message, state: FSMContext):
                 full_name=full_name,
                 telegram_id=message.from_user.id,
                 cards=[card_num],
+                role_id=2,
                 active=False
             )
             db.add(new_user)
@@ -274,7 +284,7 @@ async def cmd_link(message: types.Message):
             # Если у тебя в базе роль обычного пользователя имеет ID 1, ставь 1.
             # Без role_id Middleware будет считать, что у юзера нет прав.
             if not user.role_id:
-                user.role_id = 1
+                user.role_id = 2
 
                 # СОХРАНЕНИЕ
             db.commit()
