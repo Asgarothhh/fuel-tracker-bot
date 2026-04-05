@@ -36,7 +36,7 @@ class SmartFuelOCR:
             temperature=0
         )
         self.parser = PydanticOutputParser(pydantic_object=ReceiptData)
-        pytesseract.pytesseract.tesseract_cmd = r'D:\Tesseract-OCR\tesseract.exe'
+        pytesseract.pytesseract.tesseract_cmd = r'E:\programs\tesseract.exe'
 
     def setup_logging(self):
         """Настройка журналирования в файл и консоль"""
