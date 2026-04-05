@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from io import BytesIO
 from src.app.bot.keyboards import BTN_ADMIN_DISPUTED, BTN_ADMIN_RECENT
-from src.app.bot.handlers.user import send_operation_to_user
+from src.app.bot.notifications import send_operation_to_user
 from aiogram import types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile

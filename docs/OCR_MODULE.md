@@ -25,3 +25,5 @@
 ## Зависимости
 
 См. `requirements.txt` / окружение проекта: `opencv-python`, `pytesseract`, `langchain-openai`, `pillow-heif`, и т.д.
+
+Подробнее для разработчиков: [MODULES_SRC/OCR_INTERNALS.md](MODULES_SRC/OCR_INTERNALS.md).
