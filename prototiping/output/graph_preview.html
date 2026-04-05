@@ -94,10 +94,10 @@ footer.page-meta { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid 
   <div class="diagram-wrap">
     <div class="mermaid mermaid-render">%% prototiping.reporting.diagram
 flowchart LR
-  N0["belorusneft_parse / OK / 1.78ms"]:::okNode
-  N1["plates_import / OK / 43.62ms"]:::okNode
-  N2["auth_permissions / OK / 18.81ms"]:::okNode
-  N3["excel_ocr / OK / 5.94ms"]:::okNode
+  N0["belorusneft_parse / OK / 1.76ms"]:::okNode
+  N1["plates_import / OK / 55.7ms"]:::okNode
+  N2["auth_permissions / OK / 24.16ms"]:::okNode
+  N3["excel_ocr / OK / 7.71ms"]:::okNode
   classDef okNode fill:#1a472a,stroke:#234,color:#e8ffe8
   classDef failNode fill:#6b1c1c,stroke:#422,color:#ffe8e8
   N0 --> N1
@@ -110,7 +110,7 @@ flowchart LR
 <h2>Подробно по узлам и проверкам</h2>
 <p class="nav-top"><a href="#mermaid-block">↑ Диаграмма</a> · <a href="#top">↑ Наверх</a></p>
 <div class="nodes">
-<article class="node-card ok" id="node-belorusneft_parse"><h3><span class="badge ok">успех узла</span> Узел 1: <code>belorusneft_parse</code></h3><p class="node-meta">Парсинг API / даты (Belorusneft) · <strong>1.78 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<article class="node-card ok" id="node-belorusneft_parse"><h3><span class="badge ok">успех узла</span> Узел 1: <code>belorusneft_parse</code></h3><p class="node-meta">Парсинг API / даты (Belorusneft) · <strong>1.76 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
 <td>1</td><td>S01</td><td><code>check_parse_operations_items</code></td><td>Парсинг ответа API: ветка items/data</td>
 <td class="code" title="`src/app/belorusneft_api.py` → `parse_operations()`">`src/app/belorusneft_api.py` → `parse_operations()`</td><td class="desc" title="Проверка разбора JSON с массивом `items`: дата, продукт, чек, карта, госномер.">Проверка разбора JSON с массивом `items`: дата, продукт, чек, карта, госномер.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">items branch OK</td>
@@ -136,7 +136,7 @@ flowchart LR
 <td class="code" title="`src/app/import_logic.py` → `parse_api_datetime()`">`src/app/import_logic.py` → `parse_api_datetime()`</td><td class="desc" title="Пустые строки, не-даты, числа, нестроковые объекты — только `None`, без исключений; иначе один битый атрибут в JSON валит весь импорт.">Пустые строки, не-даты, числа, нестроковые объекты — только `None`, без исключений; иначе один битый атрибут в JSON валит весь импорт.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">garbage → None, no exception</td>
 </tr>
 </tbody></table></div></article>
-<article class="node-card ok" id="node-plates_import"><h3><span class="badge ok">успех узла</span> Узел 2: <code>plates_import</code></h3><p class="node-meta">Номера, импорт API, дедупликация · <strong>43.62 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<article class="node-card ok" id="node-plates_import"><h3><span class="badge ok">успех узла</span> Узел 2: <code>plates_import</code></h3><p class="node-meta">Номера, импорт API, дедупликация · <strong>55.7 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
 <td>7</td><td>S07</td><td><code>check_normalize_plate</code></td><td>Нормализация госномеров</td>
 <td class="code" title="`src/app/plate_util.py` → `normalize_plate()`, `plates_equal()`">`src/app/plate_util.py` → `normalize_plate()`, `plates_equal()`</td><td class="desc" title="Удаление пробелов и дефисов, сравнение номеров без учёта форматирования.">Удаление пробелов и дефисов, сравнение номеров без учёта форматирования.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">normalize + plates_equal OK</td>
@@ -158,7 +158,7 @@ flowchart LR
 <td class="code" title="`src/app/import_logic.py` → `import_api_operations()`">`src/app/import_logic.py` → `import_api_operations()`</td><td class="desc" title="Строка только с продуктом/АЗС без `dateTimeIssue` и `docNumber` должна пропускаться; следующая валидная строка в том же `issueRows` всё равно импортируется (`new_count` не обнуляется целиком).">Строка только с продуктом/АЗС без `dateTimeIssue` и `docNumber` должна пропускаться; следующая валидная строка в том же `issueRows` всё равно импортируется (`new_count` не обнуляется целиком).</td><td><span class="pill pill-ok">OK</span></td><td class="detail">1 row skipped, 1 imported</td>
 </tr>
 </tbody></table></div></article>
-<article class="node-card ok" id="node-auth_permissions"><h3><span class="badge ok">успех узла</span> Узел 3: <code>auth_permissions</code></h3><p class="node-meta">Права и токены привязки · <strong>18.81 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<article class="node-card ok" id="node-auth_permissions"><h3><span class="badge ok">успех узла</span> Узел 3: <code>auth_permissions</code></h3><p class="node-meta">Права и токены привязки · <strong>24.16 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
 <td>12</td><td>S12</td><td><code>check_user_has_permission</code></td><td>Проверка прав по роли</td>
 <td class="code" title="`src/app/permissions.py` → `user_has_permission()`">`src/app/permissions.py` → `user_has_permission()`</td><td class="desc" title="Администратор с ролью и permission `admin:manage`; отказ для несуществующего права и неизвестного пользователя.">Администратор с ролью и permission `admin:manage`; отказ для несуществующего права и неизвестного пользователя.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">admin OK, unknown denied</td>
@@ -168,7 +168,7 @@ flowchart LR
 <td class="code" title="`src/app/tokens.py` → `create_bulk_codes()`, `verify_and_consume_code()`">`src/app/tokens.py` → `create_bulk_codes()`, `verify_and_consume_code()`</td><td class="desc" title="Выпуск кода, проверка хэша, пометка токена использованным, запись `telegram_id` у пользователя.">Выпуск кода, проверка хэша, пометка токена использованным, запись `telegram_id` у пользователя.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">bulk + verify + bind OK</td>
 </tr>
 </tbody></table></div></article>
-<article class="node-card ok" id="node-excel_ocr"><h3><span class="badge ok">успех узла</span> Узел 4: <code>excel_ocr</code></h3><p class="node-meta">Схема чека и строка Excel · <strong>5.94 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<article class="node-card ok" id="node-excel_ocr"><h3><span class="badge ok">успех узла</span> Узел 4: <code>excel_ocr</code></h3><p class="node-meta">Схема чека и строка Excel · <strong>7.71 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
 <td>14</td><td>S14</td><td><code>check_receipt_schema</code></td><td>Схема данных чека (OCR)</td>
 <td class="code" title="`src/ocr/schemas.py` → модель `ReceiptData`">`src/ocr/schemas.py` → модель `ReceiptData`</td><td class="desc" title="Валидация и сериализация типичного набора полей после распознавания чека.">Валидация и сериализация типичного набора полей после распознавания чека.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">schema OK</td>
@@ -184,10 +184,10 @@ flowchart LR
   <p class="nav-top"><a href="#mermaid-block">↑ Диаграмма</a> · <a href="#top">↑ Наверх</a></p>
   <pre class="raw" tabindex="0"><code>%% prototiping.reporting.diagram
 flowchart LR
-  N0[&quot;belorusneft_parse / OK / 1.78ms&quot;]:::okNode
-  N1[&quot;plates_import / OK / 43.62ms&quot;]:::okNode
-  N2[&quot;auth_permissions / OK / 18.81ms&quot;]:::okNode
-  N3[&quot;excel_ocr / OK / 5.94ms&quot;]:::okNode
+  N0[&quot;belorusneft_parse / OK / 1.76ms&quot;]:::okNode
+  N1[&quot;plates_import / OK / 55.7ms&quot;]:::okNode
+  N2[&quot;auth_permissions / OK / 24.16ms&quot;]:::okNode
+  N3[&quot;excel_ocr / OK / 7.71ms&quot;]:::okNode
   classDef okNode fill:#1a472a,stroke:#234,color:#e8ffe8
   classDef failNode fill:#6b1c1c,stroke:#422,color:#ffe8e8
   N0 --&gt; N1
@@ -196,7 +196,7 @@ flowchart LR
 </code></pre>
 
   <footer class="page-meta">
-    <p>Сгенерировано prototiping: 2026-04-05 17:14 UTC · Mermaid 11 ESM: <code>https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs</code></p>
+    <p>Сгенерировано prototiping: 2026-04-05 17:32 UTC · Mermaid 11 ESM: <code>https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs</code></p>
   </footer>
   <script type="module">
     import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
