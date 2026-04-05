@@ -62,7 +62,11 @@ HEADERS = [
 
 
 def _first_confirmation_sender_name(db, op_id: int) -> str:
-    """Определяет, кому первому бот отправил запрос на подтверждение"""
+    """Кто первоначально получил запрос (для чеков — отправивший фото)."""
+    op = db.query(FuelOperation).filter_by(id=op_id).first()
+    if op and op.source == "personal_receipt" and op.presumed_user_id:
+        u = db.query(User).filter_by(id=op.presumed_user_id).first()
+        return u.full_name if u else "—"
     h = (
         db.query(ConfirmationHistory)
         .filter_by(operation_id=op_id)
@@ -79,7 +83,12 @@ def _ocr_text(op: FuelOperation) -> str:
     if not op.ocr_data:
         return ""
     if isinstance(op.ocr_data, dict):
-        return op.ocr_data.get("raw_text") or op.ocr_data.get("text") or ""
+        return (
+            op.ocr_data.get("raw_text")
+            or op.ocr_data.get("raw_text_debug")
+            or op.ocr_data.get("text")
+            or ""
+        )
     return str(op.ocr_data)
 
 
@@ -87,15 +96,24 @@ def _operation_row(db, op):
     api = op.api_data if isinstance(op.api_data, dict) else {}
     row_inner = api.get("row") if isinstance(api.get("row"), dict) else {}
     card_o = api.get("card") if isinstance(api.get("card"), dict) else {}
+    ocr = op.ocr_data if isinstance(op.ocr_data, dict) else {}
 
-    # Собираем данные
-    card = api.get("cardNumber") or card_o.get("cardNumber") or "—"
-    pname = api.get("productName") or row_inner.get("productName") or "—"
-    pq = api.get("productQuantity") or row_inner.get("productQuantity") or 0
-    cost = api.get("productCost") or row_inner.get("productCost") or 0
-    azs = api.get("azsNumber") or row_inner.get("azsNumber") or row_inner.get("AzsCode") or "—"
-    car_api = op.car_from_api or api.get("carNum") or row_inner.get("carNum") or "—"
-    drv = api.get("driverName") or row_inner.get("driverName") or "—"
+    if op.source == "personal_receipt":
+        card = "—"
+        pname = ocr.get("fuel_type") or "—"
+        pq = ocr.get("quantity") if ocr.get("quantity") is not None else 0
+        cost = ocr.get("total_sum") if ocr.get("total_sum") not in (None, "") else 0
+        azs = ocr.get("azs_number") or "—"
+        car_api = "—"
+        drv = "—"
+    else:
+        card = api.get("cardNumber") or card_o.get("cardNumber") or "—"
+        pname = api.get("productName") or row_inner.get("productName") or "—"
+        pq = api.get("productQuantity") or row_inner.get("productQuantity") or 0
+        cost = api.get("productCost") or row_inner.get("productCost") or 0
+        azs = api.get("azsNumber") or row_inner.get("azsNumber") or row_inner.get("AzsCode") or "—"
+        car_api = op.car_from_api or api.get("carNum") or row_inner.get("carNum") or "—"
+        drv = api.get("driverName") or row_inner.get("driverName") or "—"
 
     presumed = db.query(User).filter_by(id=op.presumed_user_id).first() if op.presumed_user_id else None
     confirmed = db.query(User).filter_by(id=op.confirmed_user_id).first() if op.confirmed_user_id else None
@@ -107,18 +125,18 @@ def _operation_row(db, op):
     return [
         op.id,                                      # ID
         fuel_type,                                  # Тип
-        op.source or "api",                         # Источник
+        op.source or "—",                           # Источник
         dt.strftime("%d.%m.%Y") if dt else "—",    # Дата
         dt.strftime("%H:%M:%S") if dt else "—",    # Время
         card, pname, pq, cost, azs,                 # Карта, Топливо, Литры, Сумма, АЗС
         op.doc_number or "—",                       # Чек
         car_api, drv,                               # Авто(API), Водитель(API)
-        "",                                         # Данные OCR
+        _ocr_text(op),                              # Данные OCR
         presumed.full_name if presumed else "—",    # Предполагаемый
         confirmed.full_name if confirmed else "—",  # Фактический
         op.actual_car or car_api,                   # Факт.Авто
-        presumed.full_name if presumed else "—",    # Инициатор
-        confirmed.full_name if confirmed else "—",  # Подтвердил
+        _first_confirmation_sender_name(db, op.id),
+        confirmed.full_name if confirmed else "—",  # Окончательно подтвердил
         STATUS_RU.get(op.status, op.status or "—"), # Статус (РУССКИЙ)
         op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—", # Дата подтв
         "",                                         # Примечание
