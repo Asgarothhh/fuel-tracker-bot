@@ -22,6 +22,11 @@ from prototiping.db.memory import init_schema, make_memory_engine, make_session_
 
 
 def _json_safe(v: Any) -> Any:
+    """Приводит значение к JSON-совместимому виду для превью в отчёте.
+
+    :param v: Произвольное значение колонки.
+    :returns: ``None``, скаляры, ``list``/``dict`` или ``str(v)``.
+    """
     if v is None:
         return None
     if isinstance(v, datetime):
@@ -32,6 +37,11 @@ def _json_safe(v: Any) -> Any:
 
 
 def _row_dict(obj) -> dict:
+    """Словарь ``имя_колонки → значение`` для ORM-объекта (через ``_json_safe``).
+
+    :param obj: Экземпляр модели SQLAlchemy.
+    :returns: Плоский dict по колонкам таблицы.
+    """
     out = {}
     for col in obj.__table__.columns:
         out[col.key] = _json_safe(getattr(obj, col.key, None))
@@ -39,6 +49,13 @@ def _row_dict(obj) -> dict:
 
 
 def seed_demo_database(session: Session) -> None:
+    """Заполняет сессию демо-пользователем, авто, картой, операциями API/OCR, токеном.
+
+    :param session: Сессия с уже созданной схемой.
+    :type session: sqlalchemy.orm.Session
+
+    :returns: ``None`` (делает ``commit``).
+    """
     perm = Permission(name="admin:manage", description="demo")
     role = Role(role_name="admin", description="demo")
     role.permissions.append(perm)
@@ -110,6 +127,13 @@ def seed_demo_database(session: Session) -> None:
 
 
 def build_db_snapshot_section_markdown() -> str:
+    """Markdown: снимок строк основных таблиц после ``seed_demo_database``.
+
+    Принимает: ничего.
+
+    :returns: Текст для ``{{DB_SNAPSHOT}}``.
+    :rtype: str
+    """
     engine = make_memory_engine()
     init_schema(engine)
     factory = make_session_factory(engine)

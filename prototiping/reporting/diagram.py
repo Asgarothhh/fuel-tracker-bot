@@ -5,6 +5,20 @@ from __future__ import annotations
 
 
 def _ascii_pipeline(nodes: list[dict]) -> str:
+    """ASCII-схема цепочки узлов (для Markdown в блоке ``text``).
+
+    :param nodes: Узлы трассировки; у каждого — ``id``, ``ok``, ``elapsed_ms``.
+    :type nodes: list[dict]
+
+    :returns: Текст для вставки в Markdown: открывающий блок `` ```text``, линии схемы, закрывающий `` ``` ``.
+    :rtype: str
+
+    Пример::
+
+        >>> s = _ascii_pipeline([{"id": "a", "ok": True, "elapsed_ms": 1}])
+        >>> "[старт]" in s and "a" in s and "[конец]" in s
+        True
+    """
     lines: list[str] = ["```text", "  [старт]"]
     for n in nodes:
         st = "OK" if n["ok"] else "FAIL"
@@ -19,12 +33,25 @@ def _ascii_pipeline(nodes: list[dict]) -> str:
 
 
 def build_mermaid_source_for_browser(trace: dict | None) -> str:
-    """Компактный Mermaid без HTML-тегов (для рендера в браузере)."""
+    """Компактный исходник Mermaid (LR), без HTML — для ``mermaid.run()`` в браузере.
+
+    :param trace: Трассировка с ключом ``nodes`` (``id``, ``ok``, ``elapsed_ms``) или ``None``.
+    :type trace: dict | None
+
+    :returns: Текст диаграммы (``flowchart LR`` и узлы со стилями ``okNode`` / ``failNode``).
+    :rtype: str
+
+    Пример::
+
+        >>> src = build_mermaid_source_for_browser(None)
+        >>> src.startswith("flowchart")
+        True
+    """
     if not trace or not trace.get("nodes"):
         return "flowchart LR\n  empty[Нет данных трассировки]\n"
 
     lines = [
-        "%% Автогенерация prototiping.tools.graph_preview",
+        "%% prototiping.reporting.diagram",
         "flowchart LR",
     ]
     ids: list[str] = []
@@ -44,7 +71,23 @@ def build_mermaid_source_for_browser(trace: dict | None) -> str:
 
 
 def build_graph_visual_markdown(trace: dict | None) -> str:
-    """Таблица + цепочка + ASCII; Mermaid только как опция для просмотрщиков с поддержкой."""
+    """Фрагмент Markdown для отчёта: таблица узлов, цепочка, ASCII, Mermaid, ссылка на HTML.
+
+    :param trace: Как у ``build_mermaid_source_for_browser``; при пустых данных — короткая заглушка.
+    :type trace: dict | None
+
+    :returns: Готовый к вставке в ``{{GRAPH_VISUAL}}`` текст (заголовки, таблица, кодовые блоки).
+    :rtype: str
+
+    Пример (без ``>>>`` — прогон графа пишет в stdout)::
+
+        from prototiping.graph.trace import run_prototype_traced
+        from prototiping.reporting.diagram import build_graph_visual_markdown
+
+        md: str = build_graph_visual_markdown(
+            run_prototype_traced(console=False, write_trace_json=False)
+        )
+    """
     if not trace or not trace.get("nodes"):
         return (
             "_Нет данных трассировки. Запустите `pytest prototiping` или "
@@ -54,7 +97,6 @@ def build_graph_visual_markdown(trace: dict | None) -> str:
     nodes: list[dict] = trace["nodes"]
     graph_name = trace.get("graph", "prototype")
 
-    # Таблица
     rows = [
         "| № | ID узла | Описание | Проверок OK | Всего проверок | мс | Узел |",
         "|---|---------|----------|-------------|----------------|-----|------|",
@@ -70,7 +112,6 @@ def build_graph_visual_markdown(trace: dict | None) -> str:
         )
     table = "\n".join(rows)
 
-    # Маркированная цепочка
     chain_parts = []
     for n in nodes:
         mark = "✓" if n["ok"] else "✗"

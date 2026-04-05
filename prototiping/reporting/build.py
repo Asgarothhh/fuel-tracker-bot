@@ -4,9 +4,14 @@
 """
 from __future__ import annotations
 
+import json
 import os
+import traceback
+from collections.abc import Callable
+from html import escape as html_escape
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from prototiping.lib.env import load_prototype_env
 
@@ -20,10 +25,88 @@ os.environ.setdefault("BEL_EMITENT_ID", "1")
 os.environ.setdefault("BEL_CONTRACT_ID", "1")
 
 from prototiping.checks.scenarios import SCENARIO_META
-from prototiping.lib.paths import REPORT_MD, REPORT_TEMPLATE
+from prototiping.lib.paths import GRAPH_PREVIEW_HTML, REPORT_MD, REPORT_TEMPLATE, TRACE_JSON
 
 
-def _get_console(verbose: bool):
+def _reset_report_file(target: Path, console: Any | None) -> None:
+    started = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    stub = (
+        "# Прототипирование — отчёт\n\n"
+        f"> **Идёт сборка…** Старт: **{started}** (UTC). "
+        "После завершения прогона файл будет полностью перезаписан.\n"
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(stub, encoding="utf-8")
+    if console:
+        _step(console, f"Файл [bold]{target}[/] сброшен (заглушка до готового отчёта)", style="dim")
+
+
+def _reset_graph_preview_stub(console: Any | None) -> None:
+    """Короткая HTML-заглушка до полной страницы (как у REPORT.md)."""
+    stub = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Граф прототипирования — сборка…</title>
+</head>
+<body>
+  <p>Идёт сборка отчёта. Файл будет заменён полной страницей после завершения прогона.</p>
+</body>
+</html>
+"""
+    GRAPH_PREVIEW_HTML.parent.mkdir(parents=True, exist_ok=True)
+    GRAPH_PREVIEW_HTML.write_text(stub, encoding="utf-8")
+    if console:
+        _step(
+            console,
+            f"Файл [bold]{GRAPH_PREVIEW_HTML}[/] сброшен (заглушка до HTML-графа)",
+            style="dim",
+        )
+
+
+def _write_graph_preview_html(console: Any | None) -> None:
+    """Пишет ``graph_preview.html`` из ``TRACE_JSON`` (обновляется в ``render_report``)."""
+    try:
+        from prototiping.tools.graph_preview import build_html
+
+        if not TRACE_JSON.is_file():
+            if console:
+                _step(
+                    console,
+                    f"[yellow]![/] нет {TRACE_JSON.name} — HTML-граф не обновлён",
+                    style="dim",
+                )
+            return
+        trace = json.loads(TRACE_JSON.read_text(encoding="utf-8"))
+        GRAPH_PREVIEW_HTML.write_text(build_html(trace), encoding="utf-8")
+        if console:
+            _step(console, f"HTML-граф: [bold]{GRAPH_PREVIEW_HTML.resolve()}[/]", style="magenta")
+    except Exception as e:
+        if console:
+            console.print(f"  [red]✗[/] не удалось записать graph_preview.html: {e}")
+        err_page = (
+            "<!DOCTYPE html><html lang=\"ru\"><head><meta charset=\"utf-8\"/><title>Ошибка сборки</title></head>"
+            f"<body><pre>{html_escape(str(e) + chr(10) + traceback.format_exc())}</pre></body></html>\n"
+        )
+        GRAPH_PREVIEW_HTML.write_text(err_page, encoding="utf-8")
+
+
+def _get_console(verbose: bool) -> Any | None:
+    """Возвращает Rich Console для цветного вывода или None (тихий режим / нет пакета).
+
+    :param verbose: Если False — всегда None; если True — ``Console()`` или None при отсутствии Rich.
+    :type verbose: bool
+
+    :returns: Экземпляр ``rich.console.Console`` либо ``None``.
+    :rtype: typing.Any | None
+
+    Пример::
+
+        >>> c = _get_console(False)
+        >>> c is None
+        True
+    """
     if not verbose:
         return None
     try:
@@ -34,7 +117,23 @@ def _get_console(verbose: bool):
         return None
 
 
-def _step(console, msg: str, *, style: str = "cyan") -> None:
+def _step(console: Any | None, msg: str, *, style: str = "cyan") -> None:
+    """Печать шага сборки (Rich или обычный print).
+
+    :param console: Объект с методом ``print`` (Rich) или ``None``.
+    :type console: typing.Any | None
+    :param msg: Текст этапа.
+    :type msg: str
+    :param style: Имя стиля Rich для префикса (игнорируется при ``console is None``).
+    :type style: str
+
+    :returns: ``None``.
+
+    Пример::
+
+        >>> _step(None, "тест")  # doctest: +ELLIPSIS
+        ▶ тест
+    """
     if console is not None:
         console.print(f"[bold {style}]▶[/] {msg}")
     else:
@@ -42,10 +141,32 @@ def _step(console, msg: str, *, style: str = "cyan") -> None:
 
 
 def collect_results_from_trace(trace_full: dict) -> list[dict]:
+    """Собирает плоский список строк отчёта из трассировки графа (узлы × проверки).
+
+    :param trace_full: Словарь от ``run_prototype_traced``: ключи ``graph``, ``overall_ok``,
+        ``nodes``; у каждого узла — ``id``, ``checks`` со полями ``fn``, ``ok``, ``detail``.
+    :type trace_full: dict
+
+    :returns: Список словарей: поля из ``SCENARIO_META``, плюс ``graph_node``, ``check_name``,
+        ``ok``, ``detail``, ``run_order`` (1…N — порядок прогона).
+    :rtype: list[dict]
+
+    :raises KeyError: Если для ``fn`` проверки нет записи в ``checks/scenarios.py``.
+
+    Пример::
+
+        >>> from prototiping.graph.trace import run_prototype_traced
+        >>> t = run_prototype_traced(console=False, write_trace_json=False)
+        >>> rows = collect_results_from_trace(t)
+        >>> isinstance(rows, list) and "id" in rows[0]
+        True
+    """
     rows: list[dict] = []
+    run_order = 0
     for node in trace_full["nodes"]:
         nid = node["id"]
         for c in node["checks"]:
+            run_order += 1
             fn_name = c["fn"]
             meta = SCENARIO_META.get(fn_name)
             if not meta:
@@ -57,27 +178,59 @@ def collect_results_from_trace(trace_full: dict) -> list[dict]:
                     "check_name": fn_name,
                     "ok": c["ok"],
                     "detail": c["detail"],
+                    "run_order": run_order,
                 }
             )
     return rows
 
 
 def _escape_md_cell(s: str) -> str:
+    """Экранирование для ячеек Markdown-таблицы (pipe, переносы).
+
+    :param s: Исходная строка.
+    :type s: str
+
+    :returns: Строка с ``|`` → ``\\|``, ``\\n`` → пробел.
+    :rtype: str
+
+    Пример::
+
+        >>> _escape_md_cell("a|b\\nc")
+        'a\\\\|b c'
+    """
     return s.replace("|", "\\|").replace("\n", " ")
 
 
 def build_table(rows: list[dict]) -> str:
+    """Markdown-таблица сценариев для вставки в шаблон отчёта.
+
+    :param rows: Элементы как у ``collect_results_from_trace`` (нужны ``id``, ``graph_node``,
+        ``title``, ``code_under_test``, ``ok``, ``detail``).
+    :type rows: list[dict]
+
+    :returns: Одна строка с заголовком и строками таблицы, разделитель ``\\n``.
+    :rtype: str
+
+    Пример::
+
+        >>> md = build_table([{"id": "S01", "graph_node": "n", "title": "t",
+        ...     "code_under_test": "c", "ok": True, "detail": "", "run_order": 1}])
+        >>> "| 1 |" in md and "| S01 |" in md and "да" in md
+        True
+    """
     lines = [
-        "| ID | Узел графа | Сценарий | Проверяемый код | Корректно | При ошибке |",
-        "|----|------------|----------|-----------------|-----------|------------|",
+        "| № | Код | Узел графа | Сценарий | Проверяемый код | Корректно | При ошибке |",
+        "|---|-----|------------|----------|-----------------|-----------|------------|",
     ]
-    for row in rows:
+    for i, row in enumerate(rows, start=1):
         ok_cell = "да" if row["ok"] else "**нет**"
         err_hint = "—" if row["ok"] else _escape_md_cell((row["detail"] or "")[:120])
         code_cell = _escape_md_cell(row["code_under_test"])
+        ro = row.get("run_order", i)
         lines.append(
-            "| {id} | `{node}` | {title} | {code} | {ok} | {err} |".format(
-                id=row["id"],
+            "| {ro} | {sid} | `{node}` | {title} | {code} | {ok} | {err} |".format(
+                ro=ro,
+                sid=row["id"],
                 node=row["graph_node"],
                 title=_escape_md_cell(row["title"]),
                 code=code_cell,
@@ -89,8 +242,24 @@ def build_table(rows: list[dict]) -> str:
 
 
 def build_details(rows: list[dict]) -> str:
+    """Развёрнутый Markdown по каждому сценарию (заголовки, списки, блок при ошибке).
+
+    :param rows: Тот же формат, что для ``build_table``.
+    :type rows: list[dict]
+
+    :returns: Склеенные секции ``###`` для плейсхолдера ``{{SCENARIOS_DETAIL}}``.
+    :rtype: str
+
+    Пример::
+
+        >>> s = build_details([{"id": "S01", "title": "T", "graph_node": "g",
+        ...     "code_under_test": "x", "description": "d", "ok": True, "detail": "ok",
+        ...     "check_name": "f", "run_order": 1}])
+        >>> "### 1. T" in s and "S01" in s and "Корректно" in s
+        True
+    """
     parts: list[str] = []
-    for row in rows:
+    for i, row in enumerate(rows, start=1):
         status = "**Корректно**" if row["ok"] else "**Ошибка**"
         detail = row["detail"] or "—"
         fail_block = ""
@@ -100,8 +269,10 @@ def build_details(rows: list[dict]) -> str:
                 f"- **Текст:** `{detail}`\n"
                 f"- **Функция:** `{row['check_name']}`\n\n"
             )
+        ro = row.get("run_order", i)
         parts.append(
-            f"### {row['id']}. {row['title']}\n\n"
+            f"### {ro}. {row['title']}\n\n"
+            f"- **Код (scenarios):** `{row['id']}`\n"
             f"- **Узел графа:** `{row['graph_node']}`\n"
             f"- **Проверяемый код:** {row['code_under_test']}\n"
             f"- **Что проверяется:** {row['description']}\n"
@@ -112,7 +283,24 @@ def build_details(rows: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _safe_section(builder, title: str, console) -> str:
+def _safe_section(builder: Callable[[], str], title: str, console: Any | None) -> str:
+    """Выполняет ``builder()``; при исключении возвращает Markdown с трассировкой.
+
+    :param builder: Нуларная функция, возвращающая фрагмент Markdown.
+    :type builder: collections.abc.Callable[[], str]
+    :param title: Подпись раздела для лога и для блока ошибки.
+    :type title: str
+    :param console: Rich-консоль или ``None``.
+    :type console: typing.Any | None
+
+    :returns: Результат ``builder()`` либо готовый блок «Ошибка при сборке раздела».
+    :rtype: str
+
+    Пример::
+
+        >>> _safe_section(lambda: "ok", "t", None)
+        'ok'
+    """
     import traceback
 
     try:
@@ -133,6 +321,21 @@ def _safe_section(builder, title: str, console) -> str:
 
 
 def render_report(*, verbose: bool = False) -> str:
+    """Полный текст ``REPORT.md``: прогон графа, подстановка всех плейсхолдеров шаблона.
+
+    :param verbose: Лог в консоль (Rich) и дерево проверок в ``run_prototype_traced``.
+    :type verbose: bool
+
+    :returns: Содержимое файла отчёта до записи на диск.
+    :rtype: str
+
+    Пример (при ``verbose=False`` в stdout всё равно идут строки ``print`` этапов)::
+
+        from prototiping.reporting.build import render_report
+
+        text: str = render_report(verbose=False)
+        text = render_report(verbose=True)  # Rich + этапы
+    """
     from prototiping.graph.trace import run_prototype_traced
     from prototiping.reporting.diagram import build_graph_visual_markdown
 
@@ -171,7 +374,11 @@ def render_report(*, verbose: bool = False) -> str:
     _step(console, "[6/7] Раздел «OCR» (изображения, Tesseract, LLM)…")
     from prototiping.reporting.ocr import build_ocr_section_markdown
 
-    ocr_md = _safe_section(build_ocr_section_markdown, "OCR", console)
+    ocr_md = _safe_section(
+        lambda: build_ocr_section_markdown(console=console),
+        "OCR",
+        console,
+    )
 
     _step(console, "[7/7] Подстановка в шаблон reporting/template.md…")
     template = REPORT_TEMPLATE.read_text(encoding="utf-8")
@@ -212,12 +419,36 @@ def render_report(*, verbose: bool = False) -> str:
 
 
 def write_report(path: Path | None = None, *, verbose: bool = False) -> Path:
+    """Собирает отчёт и записывает в файл (по умолчанию ``prototiping/REPORT.md``).
+
+    :param path: Путь к выходному ``.md``; ``None`` → ``REPORT_MD`` из ``lib.paths``.
+    :type path: pathlib.Path | None
+    :param verbose: Передаётся в ``render_report`` (Rich-этапы и лог графа).
+    :type verbose: bool
+
+    :returns: Путь, по которому записан файл.
+    :rtype: pathlib.Path
+
+    Пример (без побочного вывода в консоль — удобно копировать)::
+
+        from pathlib import Path
+        from prototiping.reporting.build import write_report
+
+        write_report(verbose=True)
+        write_report(Path("out/report.md"), verbose=False)
+
+    Сразу при вызове целевой файл перезаписывается короткой заглушкой, затем по завершении
+    сборки подставляется полный отчёт (старый текст не остаётся видимым во время долгого прогона).
+    """
     console = _get_console(verbose)
-    body = render_report(verbose=verbose)
     target = path or REPORT_MD
+    _reset_report_file(target, console)
+    _reset_graph_preview_stub(console)
+    body = render_report(verbose=verbose)
     if console:
         _step(console, f"Запись файла: [bold]{target}[/]", style="magenta")
     target.write_text(body, encoding="utf-8")
+    _write_graph_preview_html(console)
     if console:
         console.print(f"[bold green]Сохранено:[/] {target.resolve()}\n")
     return target

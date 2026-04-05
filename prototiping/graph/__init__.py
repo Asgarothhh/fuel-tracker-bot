@@ -1,3 +1,4 @@
+"""Граф сценариев: спецификация, LangGraph, трассировка."""
 from prototiping.graph.app import build_scenario_graph, run_full_scenario_graph, summarize_results
 from prototiping.graph.spec import GRAPH_NODES_SPEC, GRAPH_TITLE, verify_spec_matches_all_checks
 from prototiping.graph.trace import load_last_trace, run_prototype_traced

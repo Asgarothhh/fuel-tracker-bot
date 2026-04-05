@@ -18,6 +18,10 @@ os.environ.setdefault("BEL_CONTRACT_ID", "1")
 
 
 def pytest_addoption(parser):
+    """Регистрирует флаг ``--no-prototype-report`` для отключения перезаписи ``REPORT.md``.
+
+    :param parser: Объект pytest.
+    """
     parser.addoption(
         "--no-prototype-report",
         action="store_true",
@@ -25,8 +29,12 @@ def pytest_addoption(parser):
         help="Не перезаписывать prototiping/REPORT.md после прогона",
     )
 
-
 def pytest_sessionfinish(session, exitstatus):
+    """После сессии pytest пересобирает ``REPORT.md``, если не передан ``--no-prototype-report``.
+
+    :param session: Pytest session.
+    :param exitstatus: Код завершения сессии (не используется).
+    """
     if session.config.getoption("--no-prototype-report"):
         return
     try:

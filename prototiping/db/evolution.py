@@ -22,6 +22,12 @@ from prototiping.db.memory import init_schema, make_memory_engine
 
 
 def _counts(session) -> dict[str, int]:
+    """Число строк по основным таблицам приложения.
+
+    :param session: ORM-сессия.
+    :returns: Имя таблицы → количество записей.
+    :rtype: dict[str, int]
+    """
     models = [Permission, Role, User, Car, FuelCard, FuelOperation, LinkToken]
     out: dict[str, int] = {}
     for Model in models:
@@ -31,6 +37,13 @@ def _counts(session) -> dict[str, int]:
 
 
 def build_db_evolution_markdown() -> str:
+    """Markdown: пошаговое наполнение демо-БД и таблица счётчиков по шагам.
+
+    Принимает: ничего.
+
+    :returns: Текст для плейсхолдера ``{{DB_EVOLUTION}}`` в отчёте.
+    :rtype: str
+    """
     engine = make_memory_engine()
     init_schema(engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)

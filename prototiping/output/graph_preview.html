@@ -3,141 +3,205 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="color-scheme" content="dark"/>
   <title>Граф прототипирования — fuel_tracker_prototype</title>
-  <script type="module">
-    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
-    mermaid.initialize({ theme: "dark" });
-    await mermaid.run({ querySelector: ".mermaid-render" });
-  </script>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 1.5rem; background: #111; color: #e6e6e6; line-height: 1.45; }
-    body#top { scroll-behavior: smooth; }
-    h1 { font-size: 1.35rem; }
-    h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #333; padding-bottom: 0.35rem; }
-    h3 { font-size: 1rem; margin: 0 0 0.5rem 0; }
-    .nav { margin: 1rem 0; font-size: 0.95rem; }
-    .nav a { color: #7cb8ff; margin-right: 1rem; }
-    .nav-top { font-size: 0.9rem; margin: 0 0 1rem 0; }
-    .nav-top a { color: #7cb8ff; }
-    .status { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 6px; font-weight: 600; }
-    .status.ok { background: #1a472a; color: #cfe; }
-    .status.fail { background: #5c1a1a; color: #fcc; }
-    .mermaid { background: #1a1a1a; padding: 1rem; border-radius: 8px; margin-top: 0.5rem; }
-    pre.raw { white-space: pre-wrap; font-size: 0.75rem; color: #888; }
-    .node-card { border: 1px solid #333; border-radius: 10px; padding: 1rem 1.1rem; margin-bottom: 1.5rem; background: #161616; }
-    .node-card.ok { border-left: 4px solid #2d6a3e; }
-    .node-card.fail { border-left: 4px solid #8b2a2a; }
-    .badge { font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; margin-right: 0.5rem; }
-    .badge.ok { background: #1a472a; color: #cfe; }
-    .badge.fail { background: #5c1a1a; color: #fcc; }
-    .node-meta { color: #aaa; font-size: 0.9rem; margin: 0 0 1rem 0; }
-    table.checks { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-    table.checks th, table.checks td { border: 1px solid #2a2a2a; padding: 0.45rem 0.5rem; vertical-align: top; }
-    table.checks th { background: #222; text-align: left; }
-    tr.row-ok td { background: #0f1a12; }
-    tr.row-fail td { background: #1a0f0f; }
-    td.code, td.desc { max-width: 14rem; word-break: break-word; }
-    td.detail { max-width: 18rem; }
-    .pill { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 4px; font-weight: 700; font-size: 0.75rem; }
-    .pill-ok { background: #1a472a; color: #cfe; }
-    .pill-fail { background: #6b1c1c; color: #fcc; }
-    code { font-size: 0.85em; background: #222; padding: 0.1rem 0.25rem; border-radius: 3px; }
+
+:root { color-scheme: dark; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  margin: 0;
+  padding: 1.5rem;
+  max-width: 1200px;
+  margin-inline: auto;
+  background: #0f0f0f;
+  color: #e8e8e8;
+  line-height: 1.5;
+}
+h1 { font-size: 1.35rem; font-weight: 650; margin-top: 0; }
+h2 { font-size: 1.1rem; margin-top: 2rem; padding-bottom: 0.35rem; border-bottom: 1px solid #333; }
+h3 { font-size: 1rem; margin: 0 0 0.5rem 0; }
+.nav { margin: 1rem 0; font-size: 0.95rem; display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; }
+.nav a { color: #8ec5ff; text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+.nav-top { font-size: 0.9rem; margin: 0 0 1rem 0; }
+.nav-top a { color: #8ec5ff; }
+.status { display: inline-block; padding: 0.2rem 0.65rem; border-radius: 6px; font-weight: 600; }
+.status.ok { background: #1e4d2e; color: #d4f4dc; }
+.status.fail { background: #5c1f1f; color: #ffd4d4; }
+.diagram-wrap {
+  background: #141414;
+  padding: 1rem 1.25rem;
+  border-radius: 10px;
+  border: 1px solid #2a2a2a;
+  margin-top: 0.5rem;
+  overflow-x: auto;
+}
+.diagram-wrap .mermaid { margin: 0; }
+pre.raw {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.78rem;
+  color: #9a9a9a;
+  background: #141414;
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #2a2a2a;
+}
+.node-card {
+  border: 1px solid #333;
+  border-radius: 10px;
+  padding: 1rem 1.1rem;
+  margin-bottom: 1.5rem;
+  background: #161616;
+}
+.node-card.ok { border-left: 4px solid #2d8a44; }
+.node-card.fail { border-left: 4px solid #b33; }
+.badge { font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; margin-right: 0.5rem; }
+.badge.ok { background: #1e4d2e; color: #d4f4dc; }
+.badge.fail { background: #5c1f1f; color: #ffd4d4; }
+.node-meta { color: #aaa; font-size: 0.9rem; margin: 0 0 1rem 0; }
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.25rem; }
+table.checks { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 0.82rem; }
+table.checks th, table.checks td { border: 1px solid #2a2a2a; padding: 0.45rem 0.55rem; vertical-align: top; }
+table.checks th { background: #222; text-align: left; font-weight: 600; }
+tr.row-ok td { background: #0f1a12; }
+tr.row-fail td { background: #1a0f0f; }
+td.code, td.desc { max-width: 14rem; word-break: break-word; }
+td.detail { max-width: 18rem; }
+.pill { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 4px; font-weight: 700; font-size: 0.75rem; }
+.pill-ok { background: #1e4d2e; color: #d4f4dc; }
+.pill-fail { background: #6b1c1c; color: #fcc; }
+code { font-size: 0.85em; background: #252525; padding: 0.12rem 0.3rem; border-radius: 4px; }
+footer.page-meta { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid #333; font-size: 0.8rem; color: #888; }
+
   </style>
 </head>
 <body id="top">
-  <h1>Граф: fuel_tracker_prototype</h1>
-  <p>Итог прогона: <span class="status ok">успех</span></p>
-  <p>Источник: <code>prototiping/.last_prototype_trace.json</code> (обновляется при <code>pytest prototiping</code> или <code>python -m prototiping</code>)</p>
-  <nav class="nav">
+  <header>
+    <h1>Граф: fuel_tracker_prototype</h1>
+    <p>Итог прогона: <span class="status ok" role="status">успех</span></p>
+    <p>Источник данных: <code>prototiping/.last_prototype_trace.json</code> (обновляется при <code>pytest prototiping</code> или <code>python -m prototiping</code>)</p>
+  </header>
+  <nav class="nav" aria-label="Разделы страницы">
     <a href="#mermaid-block">Диаграмма Mermaid</a>
     <a href="#scenarios-detail">Подробности по сценариям</a>
     <a href="#mermaid-raw">Исходник Mermaid</a>
   </nav>
 
   <h2 id="mermaid-block">Диаграмма</h2>
-  <pre class="mermaid mermaid-render">%% Автогенерация prototiping.tools.graph_preview
+  <div class="diagram-wrap">
+    <div class="mermaid mermaid-render">%% prototiping.reporting.diagram
 flowchart LR
-  N0["belorusneft_parse / OK / 0.06ms"]:::okNode
-  N1["plates_import / OK / 21.38ms"]:::okNode
-  N2["auth_permissions / OK / 20.07ms"]:::okNode
-  N3["excel_ocr / OK / 8.29ms"]:::okNode
+  N0["belorusneft_parse / OK / 1.78ms"]:::okNode
+  N1["plates_import / OK / 43.62ms"]:::okNode
+  N2["auth_permissions / OK / 18.81ms"]:::okNode
+  N3["excel_ocr / OK / 5.94ms"]:::okNode
   classDef okNode fill:#1a472a,stroke:#234,color:#e8ffe8
   classDef failNode fill:#6b1c1c,stroke:#422,color:#ffe8e8
   N0 --> N1
   N1 --> N2
   N2 --> N3
-</pre>
+</div>
+  </div>
 
-  <section id="scenarios-detail" class="scenarios">
+<section id="scenarios-detail" class="scenarios" aria-label="Подробности по сценариям">
 <h2>Подробно по узлам и проверкам</h2>
 <p class="nav-top"><a href="#mermaid-block">↑ Диаграмма</a> · <a href="#top">↑ Наверх</a></p>
 <div class="nodes">
-<article class="node-card ok" id="node-belorusneft_parse"><h3><span class="badge ok">успех узла</span> Узел 1: <code>belorusneft_parse</code></h3><p class="node-meta">Парсинг API / даты (Belorusneft) · <strong>0.06 ms</strong></p><table class="checks"><thead><tr><th>ID</th><th>Функция</th><th>Сценарий</th><th>Проверяемый код</th><th>Что проверяется</th><th>Результат</th><th>Детали</th></tr></thead><tbody>
+<article class="node-card ok" id="node-belorusneft_parse"><h3><span class="badge ok">успех узла</span> Узел 1: <code>belorusneft_parse</code></h3><p class="node-meta">Парсинг API / даты (Belorusneft) · <strong>1.78 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
-<td>S01</td><td><code>check_parse_operations_items</code></td><td>Парсинг ответа API: ветка items/data</td>
+<td>1</td><td>S01</td><td><code>check_parse_operations_items</code></td><td>Парсинг ответа API: ветка items/data</td>
 <td class="code" title="`src/app/belorusneft_api.py` → `parse_operations()`">`src/app/belorusneft_api.py` → `parse_operations()`</td><td class="desc" title="Проверка разбора JSON с массивом `items`: дата, продукт, чек, карта, госномер.">Проверка разбора JSON с массивом `items`: дата, продукт, чек, карта, госномер.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">items branch OK</td>
 </tr>
 <tr class="row-ok">
-<td>S02</td><td><code>check_parse_operations_cardlist</code></td><td>Парсинг ответа API: cardList / issueRows</td>
+<td>2</td><td>S02</td><td><code>check_parse_operations_cardlist</code></td><td>Парсинг ответа API: cardList / issueRows</td>
 <td class="code" title="`src/app/belorusneft_api.py` → `parse_operations()`">`src/app/belorusneft_api.py` → `parse_operations()`</td><td class="desc" title="Текущая структура ответа Белоруснефти: вложенные `issueRows`, номер карты с уровня `cardList`.">Текущая структура ответа Белоруснефти: вложенные `issueRows`, номер карты с уровня `cardList`.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">cardList/issueRows OK</td>
 </tr>
 <tr class="row-ok">
-<td>S03</td><td><code>check_parse_api_datetime</code></td><td>Разбор даты/времени из строки API</td>
+<td>3</td><td>S03</td><td><code>check_parse_api_datetime</code></td><td>Разбор даты/времени из строки API</td>
 <td class="code" title="`src/app/import_logic.py` → `parse_api_datetime()`">`src/app/import_logic.py` → `parse_api_datetime()`</td><td class="desc" title="ISO-строка с суффиксом `Z` корректно превращается в `datetime` с timezone.">ISO-строка с суффиксом `Z` корректно превращается в `datetime` с timezone.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">2020-01-15 10:20:30+00:00</td>
 </tr>
 <tr class="row-ok">
-<td>S04</td><td><code>check_api_local_yesterday</code></td><td>Календарное «вчера» в зоне UTC+3</td>
-<td class="code" title="`src/app/import_logic.py` → `api_local_yesterday_datetime()`">`src/app/import_logic.py` → `api_local_yesterday_datetime()`</td><td class="desc" title="Дата для запросов к API в локальной зоне контракта (смещение +3 ч от UTC).">Дата для запросов к API в локальной зоне контракта (смещение +3 ч от UTC).</td><td><span class="pill pill-ok">OK</span></td><td class="detail">2026-04-03T00:00:00</td>
+<td>4</td><td>S04</td><td><code>check_api_local_yesterday</code></td><td>Календарное «вчера» в зоне UTC+3</td>
+<td class="code" title="`src/app/import_logic.py` → `api_local_yesterday_datetime()`">`src/app/import_logic.py` → `api_local_yesterday_datetime()`</td><td class="desc" title="Дата для запросов к API в локальной зоне контракта (смещение +3 ч от UTC).">Дата для запросов к API в локальной зоне контракта (смещение +3 ч от UTC).</td><td><span class="pill pill-ok">OK</span></td><td class="detail">2026-04-04T00:00:00</td>
 </tr>
-</tbody></table></article>
-<article class="node-card ok" id="node-plates_import"><h3><span class="badge ok">успех узла</span> Узел 2: <code>plates_import</code></h3><p class="node-meta">Номера, импорт API, дедупликация · <strong>21.38 ms</strong></p><table class="checks"><thead><tr><th>ID</th><th>Функция</th><th>Сценарий</th><th>Проверяемый код</th><th>Что проверяется</th><th>Результат</th><th>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
-<td>S05</td><td><code>check_normalize_plate</code></td><td>Нормализация госномеров</td>
+<td>5</td><td>S05</td><td><code>check_parse_operations_empty_items_fallback_cardlist</code></td><td>Пустой `items` и при этом рабочий `cardList`</td>
+<td class="code" title="`src/app/belorusneft_api.py` → `parse_operations()`">`src/app/belorusneft_api.py` → `parse_operations()`</td><td class="desc" title="Выражение `items or data` даёт «пусто»; парсер должен перейти к `cardList`. Иначе реальный ответ API с пустым массивом и данными в картах молча теряется.">Выражение `items or data` даёт «пусто»; парсер должен перейти к `cardList`. Иначе реальный ответ API с пустым массивом и данными в картах молча теряется.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">cardList used</td>
+</tr>
+<tr class="row-ok">
+<td>6</td><td>S06</td><td><code>check_parse_api_datetime_invalid_inputs</code></td><td>Некорректные входы `parse_api_datetime`</td>
+<td class="code" title="`src/app/import_logic.py` → `parse_api_datetime()`">`src/app/import_logic.py` → `parse_api_datetime()`</td><td class="desc" title="Пустые строки, не-даты, числа, нестроковые объекты — только `None`, без исключений; иначе один битый атрибут в JSON валит весь импорт.">Пустые строки, не-даты, числа, нестроковые объекты — только `None`, без исключений; иначе один битый атрибут в JSON валит весь импорт.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">garbage → None, no exception</td>
+</tr>
+</tbody></table></div></article>
+<article class="node-card ok" id="node-plates_import"><h3><span class="badge ok">успех узла</span> Узел 2: <code>plates_import</code></h3><p class="node-meta">Номера, импорт API, дедупликация · <strong>43.62 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<tr class="row-ok">
+<td>7</td><td>S07</td><td><code>check_normalize_plate</code></td><td>Нормализация госномеров</td>
 <td class="code" title="`src/app/plate_util.py` → `normalize_plate()`, `plates_equal()`">`src/app/plate_util.py` → `normalize_plate()`, `plates_equal()`</td><td class="desc" title="Удаление пробелов и дефисов, сравнение номеров без учёта форматирования.">Удаление пробелов и дефисов, сравнение номеров без учёта форматирования.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">normalize + plates_equal OK</td>
 </tr>
 <tr class="row-ok">
-<td>S06</td><td><code>check_extract_flat_and_duplicate</code></td><td>Плоские поля и дедупликация импорта API</td>
+<td>8</td><td>S08</td><td><code>check_extract_flat_and_duplicate</code></td><td>Плоские поля и дедупликация импорта API</td>
 <td class="code" title="`src/app/import_logic.py` → `extract_flat_fields()`, `is_duplicate_api_operation()`">`src/app/import_logic.py` → `extract_flat_fields()`, `is_duplicate_api_operation()`</td><td class="desc" title="Извлечение карты/АЗС/продукт/кол-ва и обнаружение уже сохранённой операции с тем же составным ключом.">Извлечение карты/АЗС/продукт/кол-ва и обнаружение уже сохранённой операции с тем же составным ключом.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">dedup key OK</td>
 </tr>
 <tr class="row-ok">
-<td>S07</td><td><code>check_import_api_operations_dry_run</code></td><td>Импорт операций из JSON (dry_run)</td>
+<td>9</td><td>S09</td><td><code>check_extract_flat_fields_malformed_raw</code></td><td>`raw.row` не объект (список/мусор)</td>
+<td class="code" title="`src/app/import_logic.py` → `extract_flat_fields()`">`src/app/import_logic.py` → `extract_flat_fields()`</td><td class="desc" title="Если `issueRows` когда-то придёт не тем типом в `raw`, доступ к полям через `row` не должен падать: верхний уровень операции остаётся источником правды.">Если `issueRows` когда-то придёт не тем типом в `raw`, доступ к полям через `row` не должен падать: верхний уровень операции остаётся источником правды.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">list row ignored</td>
+</tr>
+<tr class="row-ok">
+<td>10</td><td>S10</td><td><code>check_import_api_operations_dry_run</code></td><td>Импорт операций из JSON (dry_run)</td>
 <td class="code" title="`src/app/import_logic.py` → `import_api_operations(..., dry_run=True)`">`src/app/import_logic.py` → `import_api_operations(..., dry_run=True)`</td><td class="desc" title="Создание операции, привязка пользователя по карте, список уведомлений в Telegram без commit в БД.">Создание операции, привязка пользователя по карте, список уведомлений в Telegram без commit в БД.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">1 op, telegram notify</td>
 </tr>
-</tbody></table></article>
-<article class="node-card ok" id="node-auth_permissions"><h3><span class="badge ok">успех узла</span> Узел 3: <code>auth_permissions</code></h3><p class="node-meta">Права и токены привязки · <strong>20.07 ms</strong></p><table class="checks"><thead><tr><th>ID</th><th>Функция</th><th>Сценарий</th><th>Проверяемый код</th><th>Что проверяется</th><th>Результат</th><th>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
-<td>S08</td><td><code>check_user_has_permission</code></td><td>Проверка прав по роли</td>
+<td>11</td><td>S11</td><td><code>check_import_skips_without_date_and_doc</code></td><td>Пропуск строки без даты и без чека</td>
+<td class="code" title="`src/app/import_logic.py` → `import_api_operations()`">`src/app/import_logic.py` → `import_api_operations()`</td><td class="desc" title="Строка только с продуктом/АЗС без `dateTimeIssue` и `docNumber` должна пропускаться; следующая валидная строка в том же `issueRows` всё равно импортируется (`new_count` не обнуляется целиком).">Строка только с продуктом/АЗС без `dateTimeIssue` и `docNumber` должна пропускаться; следующая валидная строка в том же `issueRows` всё равно импортируется (`new_count` не обнуляется целиком).</td><td><span class="pill pill-ok">OK</span></td><td class="detail">1 row skipped, 1 imported</td>
+</tr>
+</tbody></table></div></article>
+<article class="node-card ok" id="node-auth_permissions"><h3><span class="badge ok">успех узла</span> Узел 3: <code>auth_permissions</code></h3><p class="node-meta">Права и токены привязки · <strong>18.81 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<tr class="row-ok">
+<td>12</td><td>S12</td><td><code>check_user_has_permission</code></td><td>Проверка прав по роли</td>
 <td class="code" title="`src/app/permissions.py` → `user_has_permission()`">`src/app/permissions.py` → `user_has_permission()`</td><td class="desc" title="Администратор с ролью и permission `admin:manage`; отказ для несуществующего права и неизвестного пользователя.">Администратор с ролью и permission `admin:manage`; отказ для несуществующего права и неизвестного пользователя.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">admin OK, unknown denied</td>
 </tr>
 <tr class="row-ok">
-<td>S09</td><td><code>check_tokens_flow</code></td><td>Коды привязки Telegram</td>
+<td>13</td><td>S13</td><td><code>check_tokens_flow</code></td><td>Коды привязки Telegram</td>
 <td class="code" title="`src/app/tokens.py` → `create_bulk_codes()`, `verify_and_consume_code()`">`src/app/tokens.py` → `create_bulk_codes()`, `verify_and_consume_code()`</td><td class="desc" title="Выпуск кода, проверка хэша, пометка токена использованным, запись `telegram_id` у пользователя.">Выпуск кода, проверка хэша, пометка токена использованным, запись `telegram_id` у пользователя.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">bulk + verify + bind OK</td>
 </tr>
-</tbody></table></article>
-<article class="node-card ok" id="node-excel_ocr"><h3><span class="badge ok">успех узла</span> Узел 4: <code>excel_ocr</code></h3><p class="node-meta">Схема чека и строка Excel · <strong>8.29 ms</strong></p><table class="checks"><thead><tr><th>ID</th><th>Функция</th><th>Сценарий</th><th>Проверяемый код</th><th>Что проверяется</th><th>Результат</th><th>Детали</th></tr></thead><tbody>
+</tbody></table></div></article>
+<article class="node-card ok" id="node-excel_ocr"><h3><span class="badge ok">успех узла</span> Узел 4: <code>excel_ocr</code></h3><p class="node-meta">Схема чека и строка Excel · <strong>5.94 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
-<td>S10</td><td><code>check_receipt_schema</code></td><td>Схема данных чека (OCR)</td>
+<td>14</td><td>S14</td><td><code>check_receipt_schema</code></td><td>Схема данных чека (OCR)</td>
 <td class="code" title="`src/ocr/schemas.py` → модель `ReceiptData`">`src/ocr/schemas.py` → модель `ReceiptData`</td><td class="desc" title="Валидация и сериализация типичного набора полей после распознавания чека.">Валидация и сериализация типичного набора полей после распознавания чека.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">schema OK</td>
 </tr>
 <tr class="row-ok">
-<td>S11</td><td><code>check_excel_operation_row</code></td><td>Строка отчёта для Excel</td>
+<td>15</td><td>S15</td><td><code>check_excel_operation_row</code></td><td>Строка отчёта для Excel</td>
 <td class="code" title="`src/app/excel_export.py` → `_operation_row()`">`src/app/excel_export.py` → `_operation_row()`</td><td class="desc" title="Сборка строки по ширине `HEADERS`, подстановка пользователя и типа заправки для операции из API.">Сборка строки по ширине `HEADERS`, подстановка пользователя и типа заправки для операции из API.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">row built</td>
 </tr>
-</tbody></table></article>
+</tbody></table></div></article>
 </div></section>
 
-  <h2 id="mermaid-raw">Исходник Mermaid (копирование)</h2>
-  <pre class="raw">%% Автогенерация prototiping.tools.graph_preview
+  <h2 id="mermaid-raw">Исходник Mermaid</h2>
+  <p class="nav-top"><a href="#mermaid-block">↑ Диаграмма</a> · <a href="#top">↑ Наверх</a></p>
+  <pre class="raw" tabindex="0"><code>%% prototiping.reporting.diagram
 flowchart LR
-  N0[&quot;belorusneft_parse / OK / 0.06ms&quot;]:::okNode
-  N1[&quot;plates_import / OK / 21.38ms&quot;]:::okNode
-  N2[&quot;auth_permissions / OK / 20.07ms&quot;]:::okNode
-  N3[&quot;excel_ocr / OK / 8.29ms&quot;]:::okNode
+  N0[&quot;belorusneft_parse / OK / 1.78ms&quot;]:::okNode
+  N1[&quot;plates_import / OK / 43.62ms&quot;]:::okNode
+  N2[&quot;auth_permissions / OK / 18.81ms&quot;]:::okNode
+  N3[&quot;excel_ocr / OK / 5.94ms&quot;]:::okNode
   classDef okNode fill:#1a472a,stroke:#234,color:#e8ffe8
   classDef failNode fill:#6b1c1c,stroke:#422,color:#ffe8e8
   N0 --&gt; N1
   N1 --&gt; N2
   N2 --&gt; N3
-</pre>
+</code></pre>
+
+  <footer class="page-meta">
+    <p>Сгенерировано prototiping: 2026-04-05 17:14 UTC · Mermaid 11 ESM: <code>https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs</code></p>
+  </footer>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+    await mermaid.run({ querySelector: ".mermaid-render" });
+  </script>
 </body>
 </html>

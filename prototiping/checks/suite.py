@@ -27,10 +27,34 @@ from prototiping.db.memory import memory_db_session, seed_admin_permission
 
 
 def _result(name: str, ok: bool, detail: str = "") -> dict:
+    """Единый формат результата проверки для графа и отчёта.
+
+    :param name: Короткое имя шага (отображается в трассировке).
+    :type name: str
+    :param ok: Успех или провал сценария.
+    :type ok: bool
+    :param detail: Пояснение (особенно при ``ok=False``).
+    :type detail: str
+
+    :returns: ``{"name": str, "ok": bool, "detail": str}``.
+    :rtype: dict
+
+    Пример::
+
+        d = _result("step", True, "ok")
+        assert d["ok"] is True
+    """
     return {"name": name, "ok": ok, "detail": detail}
 
 
 def check_parse_operations_items() -> dict:
+    """S01: ``parse_operations`` для JSON с массивом ``items``.
+
+    Принимает: ничего (тестовый payload внутри).
+
+    :returns: Результат ``_result``: разбор одной операции, ``doc_number`` = DOC-1.
+    :rtype: dict
+    """
     payload = {
         "items": [
             {
@@ -53,6 +77,13 @@ def check_parse_operations_items() -> dict:
 
 
 def check_parse_operations_cardlist() -> dict:
+    """S02: ``parse_operations`` для ``cardList`` / ``issueRows``.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``; при успехе одна операция, ``card_number`` с уровня карты.
+    :rtype: dict
+    """
     payload = {
         "cardList": [
             {
@@ -77,6 +108,13 @@ def check_parse_operations_cardlist() -> dict:
 
 
 def check_parse_api_datetime() -> dict:
+    """S03: ``parse_api_datetime`` для ISO-строки с суффиксом ``Z``.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``; при успехе в ``detail`` — строка ``datetime``.
+    :rtype: dict
+    """
     dt = parse_api_datetime("2020-01-15T10:20:30Z")
     if dt is None or dt.tzinfo is None:
         return _result("parse_api_datetime", False, "Z suffix parse failed")
@@ -84,13 +122,92 @@ def check_parse_api_datetime() -> dict:
 
 
 def check_api_local_yesterday() -> dict:
+    """S04: ``api_local_yesterday_datetime`` (календарное вчера в UTC+3).
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``; при успехе полночь локальной даты в ``detail``.
+    :rtype: dict
+    """
     y = api_local_yesterday_datetime()
     if y.hour != 0 or y.minute != 0:
         return _result("api_local_yesterday_datetime", False, "expected midnight")
     return _result("api_local_yesterday_datetime", True, y.isoformat())
 
 
+def check_parse_operations_empty_items_fallback_cardlist() -> dict:
+    """S05: пустой ``items`` не должен блокировать разбор ``cardList`` (типичная ошибка при ``if items is not None``).
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``.
+    :rtype: dict
+    """
+    payload = {
+        "items": [],
+        "cardList": [
+            {
+                "cardNumber": "EMPTY-ITEMS-CARD",
+                "issueRows": [
+                    {
+                        "dateTimeIssue": "2025-01-15T12:00:00+00:00",
+                        "docNumber": "DOC-EMPTY-ITEMS-FALLBACK",
+                        "productName": "АИ-95",
+                        "productQuantity": "1",
+                        "azsNumber": "1",
+                    }
+                ],
+            }
+        ],
+    }
+    try:
+        ops = parse_operations(payload)
+    except Exception as e:
+        return _result("parse_operations empty items → cardList", False, repr(e))
+    if len(ops) != 1:
+        return _result("parse_operations empty items → cardList", False, f"len={len(ops)} ops={ops!r}")
+    if ops[0].get("doc_number") != "DOC-EMPTY-ITEMS-FALLBACK":
+        return _result("parse_operations empty items → cardList", False, str(ops[0]))
+    if ops[0].get("card_number") != "EMPTY-ITEMS-CARD":
+        return _result("parse_operations empty items → cardList", False, "card_number mismatch")
+    return _result("parse_operations empty items → cardList", True, "cardList used")
+
+
+def check_parse_api_datetime_invalid_inputs() -> dict:
+    """S06: мусор в ``parse_api_datetime`` не должен ронять импорт (только ``None``).
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``.
+    :rtype: dict
+    """
+    bad_values: list = [
+        "",
+        "   ",
+        "not-a-date-at-all",
+        "2020-13-45T99:99:99",
+        12345,
+        {},
+        [],
+    ]
+    for b in bad_values:
+        try:
+            r = parse_api_datetime(b)
+        except Exception as e:
+            return _result("parse_api_datetime invalid", False, f"{b!r} raised {e!r}")
+        if r is not None:
+            return _result("parse_api_datetime invalid", False, f"{b!r} -> {r!r} expected None")
+    return _result("parse_api_datetime invalid", True, "garbage → None, no exception")
+
+
 def check_normalize_plate() -> dict:
+    """S07: ``normalize_plate`` и ``plates_equal``.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``.
+    :rtype: dict
+    """
     if normalize_plate(" 12-34 aa\t7 ") != "1234AA7":
         return _result("normalize_plate", False, normalize_plate(" 12-34 aa\t7 "))
     if not plates_equal("ab 1234", "AB-1234"):
@@ -99,6 +216,13 @@ def check_normalize_plate() -> dict:
 
 
 def check_extract_flat_and_duplicate() -> dict:
+    """S08: ``extract_flat_fields`` и ``is_duplicate_api_operation`` на in-memory БД.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``.
+    :rtype: dict
+    """
     op = {
         "doc_number": "D1",
         "date_time": datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
@@ -136,7 +260,39 @@ def check_extract_flat_and_duplicate() -> dict:
     return _result("extract_flat + duplicate", True, "dedup key OK")
 
 
+def check_extract_flat_fields_malformed_raw() -> dict:
+    """S09: ``raw.row`` не словарь — не падаем, поля берутся с верхнего уровня операции.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``.
+    :rtype: dict
+    """
+    op = {
+        "doc_number": "MALFORMED-RAW-DOC",
+        "date_time": datetime(2025, 3, 3, 8, 0, tzinfo=timezone.utc),
+        "card_number": "CARD-MALF-RAW",
+        "raw": {"row": [1, 2, 3]},
+    }
+    try:
+        flat = extract_flat_fields(op)
+    except Exception as e:
+        return _result("extract_flat malformed raw.row", False, repr(e))
+    if flat["doc"] != "MALFORMED-RAW-DOC" or flat["card"] != "CARD-MALF-RAW":
+        return _result("extract_flat malformed raw.row", False, str(flat))
+    if flat["date_time"] != op["date_time"]:
+        return _result("extract_flat malformed raw.row", False, "date_time lost")
+    return _result("extract_flat malformed raw.row", True, "list row ignored")
+
+
 def check_import_api_operations_dry_run() -> dict:
+    """S10: ``import_api_operations(..., dry_run=True)`` с пользователем и картой.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``; ожидается одна новая операция и уведомление на ``telegram_id``.
+    :rtype: dict
+    """
     payload = {
         "cardList": [
             {
@@ -177,7 +333,54 @@ def check_import_api_operations_dry_run() -> dict:
     return _result("import_api_operations dry_run", True, "1 op, telegram notify")
 
 
+def check_import_skips_without_date_and_doc() -> dict:
+    """S11: строка без даты и без номера чека пропускается; следующая строка всё ещё импортируется.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``.
+    :rtype: dict
+    """
+    payload = {
+        "cardList": [
+            {
+                "cardNumber": "SKIP-MIX-CARD",
+                "issueRows": [
+                    {
+                        "productName": "ДТ",
+                        "productQuantity": "5",
+                        "azsNumber": "9",
+                    },
+                    {
+                        "dateTimeIssue": "2025-04-04T11:00:00+00:00",
+                        "docNumber": "DOC-AFTER-SKIPPED-ROW",
+                        "productName": "АИ-92",
+                        "productQuantity": "3",
+                        "azsNumber": "3",
+                    },
+                ],
+            }
+        ]
+    }
+    with memory_db_session() as db:
+        try:
+            batch: ImportBatch = import_api_operations(db, payload, dry_run=True)
+        except Exception as e:
+            return _result("import skip no date+doc", False, repr(e))
+        db.rollback()
+    if batch.new_count != 1:
+        return _result("import skip no date+doc", False, f"new_count={batch.new_count}")
+    return _result("import skip no date+doc", True, "1 row skipped, 1 imported")
+
+
 def check_user_has_permission() -> dict:
+    """S12: ``user_has_permission`` для админа и граничных случаев.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``.
+    :rtype: dict
+    """
     with memory_db_session() as db:
         seed_admin_permission(db)
         if not user_has_permission(db, 100001, "admin:manage"):
@@ -190,6 +393,13 @@ def check_user_has_permission() -> dict:
 
 
 def check_tokens_flow() -> dict:
+    """S13: выпуск кода привязки, ``verify_and_consume_code``, запись ``telegram_id``.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``.
+    :rtype: dict
+    """
     with memory_db_session() as db:
         u = User(
             full_name="Link User",
@@ -221,6 +431,13 @@ def check_tokens_flow() -> dict:
 
 
 def check_receipt_schema() -> dict:
+    """S14: модель Pydantic ``ReceiptData`` и ``model_dump``.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``.
+    :rtype: dict
+    """
     r = ReceiptData(
         fuel_type="АИ-95",
         quantity=40.0,
@@ -241,6 +458,13 @@ def check_receipt_schema() -> dict:
 
 
 def check_excel_operation_row() -> dict:
+    """S15: ``excel_export._operation_row`` для операции из API.
+
+    Принимает: ничего.
+
+    :returns: Результат ``_result``; ширина строки = ``len(HEADERS)``.
+    :rtype: dict
+    """
     with memory_db_session() as db:
         u = User(full_name="Excel User", telegram_id=1, active=True, cars=[], cards=[], extra_ids={})
         db.add(u)
@@ -282,9 +506,13 @@ ALL_CHECKS = [
     check_parse_operations_cardlist,
     check_parse_api_datetime,
     check_api_local_yesterday,
+    check_parse_operations_empty_items_fallback_cardlist,
+    check_parse_api_datetime_invalid_inputs,
     check_normalize_plate,
     check_extract_flat_and_duplicate,
+    check_extract_flat_fields_malformed_raw,
     check_import_api_operations_dry_run,
+    check_import_skips_without_date_and_doc,
     check_user_has_permission,
     check_tokens_flow,
     check_receipt_schema,

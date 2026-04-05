@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import time
 
 from prototiping.graph.spec import GRAPH_NODES_SPEC, GRAPH_TITLE, verify_spec_matches_all_checks
@@ -11,6 +12,17 @@ from prototiping.lib.paths import TRACE_JSON
 
 
 def _print_rich_console(graph_title: str, nodes_trace: list[dict], overall_ok: bool) -> None:
+    """Вывод дерева узлов и таблицы сводки (Rich или упрощённый ``print``).
+
+    :param graph_title: Имя графа (заголовок).
+    :type graph_title: str
+    :param nodes_trace: Узлы с полями ``id``, ``title``, ``ok``, ``elapsed_ms``, ``checks``.
+    :type nodes_trace: list[dict]
+    :param overall_ok: Общий успех прогона.
+    :type overall_ok: bool
+
+    :returns: ``None``.
+    """
     try:
         from rich.console import Console
         from rich.panel import Panel
@@ -59,15 +71,49 @@ def _print_rich_console(graph_title: str, nodes_trace: list[dict], overall_ok: b
 
 
 def run_prototype_traced(*, console: bool = True, write_trace_json: bool = True) -> dict:
+    """Последовательно выполняет все проверки из ``GRAPH_NODES_SPEC`` и собирает трассировку.
+
+    :param console: Печать Rich-дерева и сводки; при ``False`` — без панелей.
+    :type console: bool
+    :param write_trace_json: Записать JSON в ``prototiping/.last_prototype_trace.json``.
+    :type write_trace_json: bool
+
+    :returns: Словарь с ключами ``graph``, ``overall_ok``, ``nodes``, ``flat_results``
+        (сые ответы ``_result`` по порядку вызовов).
+    :rtype: dict
+
+    Пример::
+
+        payload = run_prototype_traced(console=False, write_trace_json=False)
+        assert "nodes" in payload and "overall_ok" in payload
+    """
     verify_spec_matches_all_checks()
 
     nodes_trace: list[dict] = []
     flat_results: list[dict] = []
 
+    prog_console = None
+    if console:
+        try:
+            from rich.console import Console
+
+            prog_console = Console(stderr=False)
+        except ImportError:
+            prog_console = None
+
     for spec in GRAPH_NODES_SPEC:
         t0 = time.perf_counter()
         check_out: list[dict] = []
         for fn in spec["checks"]:
+            if prog_console is not None:
+                prog_console.print(
+                    f"  [bold yellow]▶[/] узел [cyan]{spec['id']}[/] — "
+                    f"сценарий [bold]`{fn.__name__}`[/]"
+                )
+            elif console:
+                print(f"  ▶ [{spec['id']}] {fn.__name__} …", file=sys.stderr, flush=True)
+            elif sys.stderr.isatty():
+                print(f"  ▶ [{spec['id']}] {fn.__name__} …", file=sys.stderr, flush=True)
             raw = fn()
             entry = {
                 "fn": fn.__name__,
@@ -113,6 +159,11 @@ def run_prototype_traced(*, console: bool = True, write_trace_json: bool = True)
 
 
 def load_last_trace() -> dict | None:
+    """Читает последнюю сохранённую трассировку с диска.
+
+    :returns: Распарсенный JSON или ``None``, если файла нет / битый JSON.
+    :rtype: dict | None
+    """
     if not TRACE_JSON.is_file():
         return None
     try:

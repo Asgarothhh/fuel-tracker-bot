@@ -1,1 +1,1 @@
-# pytest package
+"""Тесты пакета ``prototiping`` (pytest)."""
