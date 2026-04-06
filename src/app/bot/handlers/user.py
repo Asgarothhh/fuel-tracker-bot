@@ -25,7 +25,7 @@ from src.app.bot.keyboards import (
     BTN_USER_HELP,
     BTN_USER_HOME,
     BTN_ADMIN_HOME,
-    BTN_USER_SEND_CHECK, BTN_USER_PENDING, BTN_USER_CARS,
+    BTN_USER_SEND_CHECK, BTN_USER_PENDING, BTN_USER_CARS, BTN_USER_LINK_ACCOUNT, BTN_USER_CHANGE_CARD
 )
 from aiogram import Bot, F, types
 from src.app.models import FuelOperation
@@ -41,6 +41,10 @@ class RegistrationStates(StatesGroup):
     waiting_for_card = State()
 
 
+class CardUpdateStates(StatesGroup):
+    waiting_for_new_card = State()
+
+
 class ReceiptStates(StatesGroup):
     waiting_for_photo = State()
     waiting_for_confirmation = State()
@@ -49,6 +53,9 @@ class ReceiptStates(StatesGroup):
     waiting_for_disputed_car = State()  # Какое авто (при споре)
     waiting_for_confirmed_car = State()  # Какое авто (при подтверждении)
     waiting_for_new_car_add = State()
+
+class LinkStates(StatesGroup):
+    waiting_for_code = State()
 
 
 logger = logging.getLogger("bot.user")
@@ -67,14 +74,15 @@ USER_HELP_TEXT = (
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
 
-    # Путь к баннеру. Убедитесь, что в папке с проектом есть папка assets, а в ней этот файл
+    # Путь к баннеру
     banner_path = os.path.join("E:/PythonProjects/fuel-tracker-bot/src/app/bot/assets/Frame 1 (2).png")
 
     if os.path.exists(banner_path):
         try:
+            # Используем answer_photo один раз, чтобы поприветствовать
             await message.answer_photo(
                 photo=FSInputFile(banner_path),
-                caption="⛽️ **Добро пожаловать в систему учета топлива!**",
+                caption="⛽️ **Система учета топлива Fuel Tracker**",
                 parse_mode="Markdown"
             )
         except Exception as e:
@@ -86,40 +94,75 @@ async def cmd_start(message: types.Message, state: FSMContext):
         if user:
             if user.active:
                 is_admin = user_has_permission(db, message.from_user.id, "admin:manage")
-
                 if is_admin:
-                    await message.reply(
-                        "👑 **Панель администратора**. Кнопки ниже или команды в меню бота.",
-                        reply_markup=reply_keyboard_admin(),  # Здесь скобки были — это ГУД
+                    await message.answer(
+                        "👑 **Панель администратора**",
+                        reply_markup=reply_keyboard_admin(),
                         parse_mode="Markdown",
                     )
                 else:
-                    await message.reply(
+                    await message.answer(
                         f"✅ С возвращением, {user.full_name}!",
-                        # ВОТ ТУТ БЫЛА ОШИБКА: добавляем скобки ()
-                        reply_markup=reply_keyboard_user(),
+                        reply_markup=reply_keyboard_user(), # Сюда добавили скобки
                         parse_mode="Markdown",
                     )
             else:
-                await message.reply(
-                    "⏳ Ваш аккаунт ожидает активации администратором.\n"
-                    "Если у вас есть код доступа, введите его сейчас."
+                # ИСПРАВЛЕНИЕ: Добавляем кнопку привязки для неактивных
+                from src.app.bot.keyboards import reply_keyboard_unauthorized
+                await message.answer(
+                    "⏳ Ваш аккаунт ожидает активации.\n\n"
+                    "Если у вас есть код, нажмите кнопку ниже или введите его: `/link код`",
+                    reply_markup=reply_keyboard_unauthorized(), # <--- ЭТО ВАЖНО
+                    parse_mode="Markdown"
                 )
             return
 
-    # Логика для новых пользователей
+    # Логика для новых пользователей (совсем нет в базе)
     await message.answer(
         "👋 **Добро пожаловать!**\n\nДля начала работы необходимо зарегистрироваться.\n"
         "Введите ваше **ФИО** (полностью):",
+        reply_markup=types.ReplyKeyboardRemove(), # Убираем старые кнопки, если были
         parse_mode="Markdown"
     )
     await state.set_state(RegistrationStates.waiting_for_name)
-
 
 async def process_reg_name(message: types.Message, state: FSMContext):
     await state.update_data(full_name=message.text.strip())
     await message.reply("Теперь введите номер вашей топливной карты (только цифры):")
     await state.set_state(RegistrationStates.waiting_for_card)
+
+
+# 2. Хендлер нажатия на кнопку
+async def btn_change_card(message: types.Message, state: FSMContext):
+    await message.answer(
+        "💳 **Введите новый номер вашей топливной карты:**\n\n"
+        "*(Если у вас несколько карт, введите их через запятую)*",
+        parse_mode="Markdown",
+        reply_markup=types.ReplyKeyboardRemove()  # Временно прячем меню
+    )
+    await state.set_state(CardUpdateStates.waiting_for_new_card)
+
+
+# 3. Хендлер получения самого номера карты
+async def process_new_card(message: types.Message, state: FSMContext):
+    new_cards_raw = message.text.strip()
+    # Разбиваем по запятой и удаляем лишние пробелы, если ввели несколько
+    cards_list = [c.strip() for c in new_cards_raw.split(",") if c.strip()]
+
+    with get_db_session() as db:
+        user = db.query(User).filter(User.telegram_id == message.from_user.id).first()
+        if user:
+            user.cards = cards_list  # Сохраняем массив карт (JSON/Array)
+            db.commit()
+            await message.answer(
+                f"✅ **Карта успешно обновлена!**\nТекущие карты: {', '.join(cards_list)}",
+                parse_mode="Markdown",
+                reply_markup=reply_keyboard_user()  # Возвращаем меню
+            )
+        else:
+            await message.answer("❌ Ошибка: Профиль не найден.", reply_markup=reply_keyboard_user())
+
+    await state.clear()
 
 
 async def process_reg_card(message: types.Message, state: FSMContext):
@@ -237,69 +280,84 @@ async def cmd_myprofile(message: types.Message):
     await message.reply(f"ФИО: {full_name}\nКарты: {cards_s}\nАвто: {cars_s}")
 
 
-async def cmd_link(message: types.Message):
-    args = extract_args(message)
-    if not args:
-        await message.reply("Введите: /link <код> (код выдаёт администратор).")
-        return
+async def cmd_link(message: types.Message, state: FSMContext):
+    # 1. Проверяем, не является ли сообщение просто текстом кнопки
+    if message.text == BTN_USER_LINK_ACCOUNT:
+        await message.answer(
+            "🔑 **Введите код привязки**\n\nОтправьте код администратора ответным сообщением.",
+            parse_mode="Markdown",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+        await state.set_state(LinkStates.waiting_for_code)
+        return  # Важно выйти здесь!
 
-    code = args.split()[0]
+    # 2. Если это команда /link [код]
+    args = extract_args(message)
+    if args:
+        code = args.split()[0]
+        # Если в коде случайно оказался текст кнопки (защита от дурака)
+        if code == BTN_USER_LINK_ACCOUNT:
+            await message.answer("Пожалуйста, введите сам цифровой/буквенный код.")
+            return
+
+        return await process_link_logic(message, code, state)
+
+    # 3. Если просто /link без ничего
+    await message.answer(
+        "🔑 **Введите код привязки**\n\nОтправьте код администратора ответным сообщением.",
+        parse_mode="Markdown",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+    await state.set_state(LinkStates.waiting_for_code)
+
+
+async def process_link_message(message: types.Message, state: FSMContext):
+    code = message.text.strip()
+    await process_link_logic(message, code, state)
+
+
+# 3. Общая логика обработки (твой исходный код с проверками)
+async def process_link_logic(message: types.Message, code: str, state: FSMContext):
+    await state.clear()  # Сбрасываем состояние сразу
 
     with get_db_session() as db:
-        # 1. Проверяем и "гасим" код в базе
+        # 1. Проверяем код
         ok, result = verify_and_consume_code(db, code, message.from_user.id)
 
         if not ok:
-            reason = result
-            # ... (логика обработки ошибок остается прежней)
-            if reason == "invalid_or_used":
-                await message.reply("Код неверен или уже использован.")
-            elif reason == "expired":
-                await message.reply("Код просрочен.")
-            elif reason == "already_linked_to_other":
-                await message.reply("Эта запись уже привязана к другому Telegram.")
-            else:
-                await message.reply("Ошибка привязки.")
+            # Твоя логика ошибок
+            error_msgs = {
+                "invalid_or_used": "Код неверен или уже использован.",
+                "expired": "Код просрочен.",
+                "already_linked_to_other": "Эта запись уже привязана к другому Telegram."
+            }
+            await message.reply(error_msgs.get(result, "Ошибка привязки."))
             return
 
-        # 2. Получаем ID пользователя из результата проверки кода
-        user_id = None
-        if isinstance(result, dict) and "user_id" in result:
-            user_id = result["user_id"]
-        elif hasattr(result, "user_id"):
-            user_id = result.user_id
+        # 2. Получаем ID пользователя
+        user_id = result.get("user_id") if isinstance(result, dict) else getattr(result, "user_id", None)
 
         if not user_id:
             await message.reply("Ошибка: запись пользователя не найдена.")
             return
 
-        # 3. Загружаем объект пользователя для редактирования
+        # 3. Активация
         user = db.query(User).filter(User.id == user_id).first()
-
         if user:
-            # АКТИВАЦИЯ
             user.active = True
-
-            # НАЗНАЧЕНИЕ РОЛИ (Обязательно!)
-            # Если у тебя в базе роль обычного пользователя имеет ID 1, ставь 1.
-            # Без role_id Middleware будет считать, что у юзера нет прав.
             if not user.role_id:
                 user.role_id = 2
-
-                # СОХРАНЕНИЕ
             db.commit()
 
-            # Подготовка данных для ответа
-            full_name = user.full_name
             cards_s = ", ".join(user.cards or []) or "—"
-            cars_s = ", ".join(user.cars or []) or "—"  # исправлено: берем из user.cars
+            cars_s = ", ".join(user.cars or []) or "—"
 
             await message.reply(
                 f"✅ **Аккаунт успешно активирован!**\n\n"
-                f"ФИО: {full_name}\n"
+                f"ФИО: {user.full_name}\n"
                 f"Карты: {cards_s}\n"
                 f"Авто: {cars_s}",
-                reply_markup=reply_keyboard_user(),  # Сразу даем кнопки пользователя
+                reply_markup=reply_keyboard_user(),
                 parse_mode="Markdown"
             )
         else:
@@ -766,6 +824,10 @@ def register_user_handlers(dp):
     dp.message.register(process_reg_card, RegistrationStates.waiting_for_card)
     dp.message.register(cmd_start, Command(commands=["start"]))
     dp.message.register(cmd_link, Command(commands=["link"]))
+    dp.message.register(cmd_link, F.text == BTN_USER_LINK_ACCOUNT)
+    dp.message.register(process_link_message, LinkStates.waiting_for_code)
+    dp.message.register(btn_change_card, F.text == BTN_USER_CHANGE_CARD)
+    dp.message.register(process_new_card, CardUpdateStates.waiting_for_new_card)
     dp.message.register(cmd_myprofile, Command(commands=["myprofile"]))
     dp.message.register(cmd_user_help, Command(commands=["help"]))
     dp.message.register(btn_send_receipt_start, Command(commands=["check"]))

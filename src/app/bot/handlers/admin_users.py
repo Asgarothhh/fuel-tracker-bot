@@ -14,17 +14,11 @@ from src.app.permissions import require_permission
 from src.app.tokens import generate_code, hash_code
 from src.app.bot.utils import extract_args, PENDING_PLAINS
 
+# Добавьте импорт Bot, если его нет
+from aiogram import Bot
 
-@require_permission("admin:manage")
-async def cmd_users(message: types.Message):
-    args = extract_args(message)
-    page = 1
-    try:
-        if args:
-            page = max(1, int(args))
-    except ValueError:
-        page = 1
 
+async def send_users_list(chat_id: int, bot: Bot, page: int):
     page_size = 10
     offset = (page - 1) * page_size
 
@@ -32,16 +26,17 @@ async def cmd_users(message: types.Message):
         total = db.query(User).count()
         rows = (
             db.query(User.id, User.full_name, User.telegram_id, User.active)
-            .order_by(User.id)
+            .order_by(User.id.desc())  # <-- РЕШЕНИЕ ЗАДАЧИ 3 (Новые сверху)
             .offset(offset)
             .limit(page_size)
             .all()
         )
 
     if not rows:
-        await message.reply("Пользователи не найдены.")
+        await bot.send_message(chat_id, "Пользователи не найдены.")
         return
 
+    # Отправляем карточку каждого пользователя
     for row in rows:
         user_id, full_name, telegram_id, active = row
         tg = f"id:{telegram_id}" if telegram_id else "—"
@@ -55,19 +50,48 @@ async def cmd_users(message: types.Message):
                 ]
             ]
         )
-        await message.answer(text, reply_markup=kb)
+        await bot.send_message(chat_id, text, reply_markup=kb)
 
+    # Пагинация
     pages = (total + page_size - 1) // page_size
     nav_buttons = []
     if page > 1:
         nav_buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data=f"users_page:{page - 1}"))
     if page < pages:
         nav_buttons.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data=f"users_page:{page + 1}"))
+
     if nav_buttons:
-        await message.answer(
+        await bot.send_message(
+            chat_id,
             f"Страница {page}/{pages}",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[nav_buttons]),
         )
+
+
+@require_permission("admin:manage")
+async def cmd_users(message: types.Message):
+    args = extract_args(message)
+    page = 1
+    if args:
+        try:
+            page = max(1, int(args.split()[0]))
+        except ValueError:
+            pass
+
+    # Вызываем нашу новую функцию
+    await send_users_list(message.chat.id, message.bot, page)
+
+
+@require_permission("admin:manage")
+async def callback_users_page(call: types.CallbackQuery):
+    page = int(call.data.split(":", 1)[1])
+
+    # Удаляем старое сообщение с кнопками пагинации, чтобы не засорять чат
+    await call.message.delete()
+
+    # Вызываем нашу новую функцию (РЕШЕНИЕ ЗАДАЧИ 1)
+    await send_users_list(call.message.chat.id, call.bot, page)
+    await call.answer()
 
 
 @require_permission("admin:manage")
@@ -185,19 +209,7 @@ async def cmd_export_codes(message: types.Message):
         await message.reply_document(InputFile(bio, filename=bio.name))
 
 
-@require_permission("admin:manage")
-async def callback_users_page(call: types.CallbackQuery):
-    page = int(call.data.split(":", 1)[1])
-    await call.message.delete()
-    fake_msg = types.Message(**{
-        "message_id": call.message.message_id,
-        "date": call.message.date,
-        "chat": call.message.chat,
-        "from_user": call.from_user,
-        "text": f"/users {page}",
-    })
-    await cmd_users(fake_msg)
-    await call.answer()
+
 
 
 @require_permission("admin:manage")
