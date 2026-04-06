@@ -9,10 +9,10 @@
 | Документ | Содержание |
 |----------|------------|
 | [MODULES_SRC/README.md](docs/MODULES_SRC/README.md) | **Документация для разработчиков** по всем модулям `src/` (архитектура, ER, FSM, диаграммы) |
-| [TELEGRAM_BOT.md](TELEGRAM_BOT.md) | Команды, приветствие, структура бота (кратко) |
-| [PERSONAL_FUNDS_SCENARIO.md](PERSONAL_FUNDS_SCENARIO.md) | Сценарий «за личные средства» по шагам ТЗ |
-| [OCR_MODULE.md](OCR_MODULE.md) | Пайплайн OCR, переменные окружения (кратко) |
-| [EXCEL_AND_DATA.md](EXCEL_AND_DATA.md) | Excel, справочники авто и пользователей |
+| [TELEGRAM_BOT.md](docs/TELEGRAM_BOT.md) | Команды, приветствие, структура бота (кратко) |
+| [PERSONAL_FUNDS_SCENARIO.md](docs/PERSONAL_FUNDS_SCENARIO.md) | Сценарий «за личные средства» по шагам ТЗ |
+| [OCR_MODULE.md](docs/OCR_MODULE.md) | Пайплайн OCR, переменные окружения (кратко) |
+| [EXCEL_AND_DATA.md](docs/EXCEL_AND_DATA.md) | Excel, справочники авто и пользователей |
 
 Код клиента **API Белоруснефти** в репозитории не изменялся; интеграция описывается только на уровне архитектуры в исходниках.
 
@@ -30,24 +30,24 @@
 
 | Документ | О чём |
 |----------|--------|
-| [QUICKSTART.md](QUICKSTART.md) | Пошагово: написание тестов/сценариев, примеры, диаграммы |
-| [HOW_IT_WORKS.md](HOW_IT_WORKS.md) | Зачем пакет, поток до `REPORT.md`, граф LangGraph, артефакты |
-| [STRUCTURE.md](STRUCTURE.md) | Дерево каталогов, роли модулей, диаграммы |
-| [ADDING_SCENARIOS.md](ADDING_SCENARIOS.md) | Краткая схема добавления сценария + ссылка на QUICKSTART |
-| [REPORT_TEMPLATE.md](REPORT_TEMPLATE.md) | Как собирается отчёт из `reporting/template.md`, все `{{…}}`, как править шаблон |
-| [GRAPH_PREVIEW_HTML.md](GRAPH_PREVIEW_HTML.md) | Как собирается `output/graph_preview.html`, Mermaid 11, структура страницы, офлайн |
+| [QUICKSTART.md](docs/QUICKSTART.md) | Пошагово: написание тестов/сценариев, примеры, диаграммы |
+| [HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) | Зачем пакет, поток до `REPORT.md`, граф LangGraph, артефакты |
+| [STRUCTURE.md](docs/STRUCTURE.md) | Дерево каталогов, роли модулей, диаграммы |
+| [ADDING_SCENARIOS.md](docs/ADDING_SCENARIOS.md) | Краткая схема добавления сценария + ссылка на QUICKSTART |
+| [REPORT_TEMPLATE.md](docs/REPORT_TEMPLATE.md) | Как собирается отчёт из `reporting/template.md`, все `{{…}}`, как править шаблон |
+| [GRAPH_PREVIEW_HTML.md](docs/GRAPH_PREVIEW_HTML.md) | Как собирается `output/graph_preview.html`, Mermaid 11, структура страницы, офлайн |
 
 ### Справочник по подпакетам (`docs/MODULES/`)
 
 | Папка / область | Файл |
 |-----------------|------|
-| `prototiping/db/` | [MODULES/DB.md](MODULES/DB.md) |
-| `prototiping/checks/` | [MODULES/CHECKS.md](MODULES/CHECKS.md) |
-| `prototiping/graph/` | [MODULES/GRAPH.md](MODULES/GRAPH.md) |
-| `prototiping/reporting/` | [MODULES/REPORTING.md](MODULES/REPORTING.md) |
-| `prototiping/lib/` | [MODULES/LIB.md](MODULES/LIB.md) |
-| `prototiping/tools/` | [MODULES/TOOLS.md](MODULES/TOOLS.md) |
-| `prototiping/tests/` + `conftest.py`, `__main__.py` | [MODULES/TESTS.md](MODULES/TESTS.md) |
+| `prototiping/db/` | [MODULES/DB.md](docs/MODULES/DB.md) |
+| `prototiping/checks/` | [MODULES/CHECKS.md](docs/MODULES/CHECKS.md) |
+| `prototiping/graph/` | [MODULES/GRAPH.md](docs/MODULES/GRAPH.md) |
+| `prototiping/reporting/` | [MODULES/REPORTING.md](docs/MODULES/REPORTING.md) |
+| `prototiping/lib/` | [MODULES/LIB.md](docs/MODULES/LIB.md) |
+| `prototiping/tools/` | [MODULES/TOOLS.md](docs/MODULES/TOOLS.md) |
+| `prototiping/tests/` + `conftest.py`, `__main__.py` | [MODULES/TESTS.md](docs/MODULES/TESTS.md) |
 
 ## Быстрый старт (команды)
 
@@ -59,7 +59,7 @@ PYTHONPATH=. pytest prototiping -q
 PYTHONPATH=. python -m prototiping.tools.graph_preview
 ```
 
-Первая команда — `REPORT.md` и Rich в консоли; вторая — pytest и перезапись отчёта; третья — HTML-превью графа (подробнее [GRAPH_PREVIEW_HTML.md](GRAPH_PREVIEW_HTML.md)).
+Первая команда — `REPORT.md` и Rich в консоли; вторая — pytest и перезапись отчёта; третья — HTML-превью графа (подробнее [GRAPH_PREVIEW_HTML.md](docs/GRAPH_PREVIEW_HTML.md)).
 
 Отчёты и слепки:
 
@@ -71,4 +71,4 @@ PYTHONPATH=. python -m prototiping.tools.graph_preview
 
 **Прототипирование** — это набор **автоматических проверок** кода приложения (`src/`), согласованных со **спецификацией графа** (`graph/spec.py`), с **отчётом** и **HTML-превью**, без обязательного изменения боевого кода ради тестов.
 
-Дальше: [Как это работает →](HOW_IT_WORKS.md)
+Дальше: [Как это работает →](docs/HOW_IT_WORKS.md)
