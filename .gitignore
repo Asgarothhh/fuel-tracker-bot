@@ -1,6 +1,10 @@
 /.venv
 /.idea
 .env
+__pycache__/
+*.pyc
+*.log
+temp_ocr/
 prototiping/.env
 prototiping/.last_prototype_trace.json
 exports/welcome_shown.json
