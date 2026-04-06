@@ -4,12 +4,15 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- Пользователь ---
 BTN_USER_PROFILE = "👤 Мой профиль"
+BTN_USER_LINK_ACCOUNT = "🔗 Ввести код привязки"
+BTN_USER_CHANGE_CARD = "💳 Сменить карту"
 BTN_USER_CARS = "🚗 Мои авто" # Новая кнопка
 BTN_USER_LINK_HELP = "🔑 Как привязать аккаунт"
 BTN_USER_SEND_CHECK = "📸 Отправить чек"
 BTN_USER_HELP = "❓ Помощь"
 BTN_USER_HOME = "🏠 Главное меню"
 BTN_USER_PENDING = "⏳ Мои уведомления"
+
 
 # --- Администратор ---
 BTN_ADMIN_IMPORT = "📥 Обновить импорт"
@@ -31,8 +34,21 @@ def reply_keyboard_user() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=BTN_USER_PENDING), KeyboardButton(text=BTN_USER_SEND_CHECK)],
-            [KeyboardButton(text=BTN_USER_PROFILE), KeyboardButton(text=BTN_USER_CARS)], # Кнопка "Мои авто" здесь
-            [KeyboardButton(text=BTN_USER_HELP), KeyboardButton(text=BTN_USER_LINK_HELP)]
+            [KeyboardButton(text=BTN_USER_PROFILE), KeyboardButton(text=BTN_USER_CARS)],
+            [KeyboardButton(text=BTN_USER_HELP), KeyboardButton(text=BTN_USER_LINK_HELP)],
+            [KeyboardButton(text=BTN_USER_CHANGE_CARD)],
+            [KeyboardButton(text=BTN_USER_LINK_ACCOUNT)]
+        ],
+        resize_keyboard=True,
+    )
+
+# src/app/bot/keyboards.py
+
+def reply_keyboard_unauthorized() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_USER_LINK_ACCOUNT)], # Та самая кнопка
+            [KeyboardButton(text=BTN_USER_HELP)]
         ],
         resize_keyboard=True,
     )
