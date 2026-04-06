@@ -8,7 +8,7 @@
 
 | Документ | Содержание |
 |----------|------------|
-| [MODULES_SRC/README.md](MODULES_SRC/README.md) | **Документация для разработчиков** по всем модулям `src/` (архитектура, ER, FSM, диаграммы) |
+| [MODULES_SRC/README.md](docs/MODULES_SRC/README.md) | **Документация для разработчиков** по всем модулям `src/` (архитектура, ER, FSM, диаграммы) |
 | [TELEGRAM_BOT.md](TELEGRAM_BOT.md) | Команды, приветствие, структура бота (кратко) |
 | [PERSONAL_FUNDS_SCENARIO.md](PERSONAL_FUNDS_SCENARIO.md) | Сценарий «за личные средства» по шагам ТЗ |
 | [OCR_MODULE.md](OCR_MODULE.md) | Пайплайн OCR, переменные окружения (кратко) |
