@@ -7,6 +7,8 @@ from src.app.models import User, Role, Permission, role_permissions
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
 from typing import Callable, Dict, Any, Awaitable
+from src.app.bot.keyboards import reply_keyboard_unauthorized, BTN_USER_LINK_ACCOUNT
+
 
 def user_has_permission(db, telegram_id: int, permission_name: str) -> bool:
     """
@@ -33,11 +35,6 @@ def user_has_permission(db, telegram_id: int, permission_name: str) -> bool:
 
 
 class ActiveUserMiddleware(BaseMiddleware):
-    """
-    Глобальный фильтр: если пользователь привязан к Telegram,
-    но в базе active=False, бот перестает его обслуживать.
-    """
-
     async def __call__(
             self,
             handler: Callable[[Message | CallbackQuery, Dict[str, Any]], Awaitable[Any]],
@@ -46,30 +43,37 @@ class ActiveUserMiddleware(BaseMiddleware):
     ) -> Any:
         user_tg_id = event.from_user.id
         state = data.get("state")
-
-        # 1. ПОЛНОЕ ИСКЛЮЧЕНИЕ ДЛЯ РЕГИСТРАЦИИ И АКТИВАЦИИ
         current_state = await state.get_state() if state else None
 
-        # Проверяем, не вводит ли пользователь команду активации
-        is_command = False
+        # 1. ПРОВЕРКА НА "РАЗРЕШЕННЫЕ" ДЕЙСТВИЯ
+        is_auth_action = False
         if isinstance(event, Message) and event.text:
-            # Разрешаем /start и /link проходить сквозь блок деактивации
-            if event.text.startswith('/start') or event.text.startswith('/link'):
-                is_command = True
+            # РАЗРЕШАЕМ: /start, /link И текст кнопки "Ввести код привязки"
+            if (event.text.startswith('/start') or
+                    event.text.startswith('/link') or
+                    event.text == BTN_USER_LINK_ACCOUNT):
+                is_auth_action = True
 
-        # Если в процессе регистрации ИЛИ вводит команду — пропускаем к хендлерам
-        if is_command or (current_state and current_state.startswith("RegistrationStates:")):
+        # Пропускаем к хендлерам, если это команда активации ИЛИ юзер уже в процессе ввода кода
+        if is_auth_action or (current_state and (
+                current_state.startswith("RegistrationStates:") or
+                current_state == "LinkStates:waiting_for_code"
+        )):
             return await handler(event, data)
 
-        # 2. ОБЫЧНАЯ ПРОВЕРКА БАЗЫ
+        # 2. ПРОВЕРКА АКТИВНОСТИ В БАЗЕ
         with get_db_session() as db:
             user = db.query(User).filter(User.telegram_id == user_tg_id).first()
 
-            # Если юзер есть, но не активен — стоп (кроме случаев выше)
+            # Если юзер найден, но не активен
             if user and not user.active:
                 if isinstance(event, Message):
-                    await event.answer("❌ Ваш аккаунт ожидает активации. Введите код: `/link ваш_код`",
-                                       parse_mode="Markdown")
+                    await event.answer(
+                        "❌ Ваш аккаунт ожидает активации.\n\n"
+                        "Нажмите кнопку ниже или введите код вручную: `/link ваш_код`",
+                        parse_mode="Markdown",
+                        reply_markup=reply_keyboard_unauthorized()  # ПОКАЗЫВАЕМ КНОПКУ ТУТ
+                    )
                 return
 
         return await handler(event, data)

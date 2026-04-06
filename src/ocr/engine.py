@@ -2,7 +2,6 @@ import hashlib
 import os
 import logging
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,9 +36,7 @@ class SmartFuelOCR:
             temperature=0
         )
         self.parser = PydanticOutputParser(pydantic_object=ReceiptData)
-        tess = os.environ.get("TESSERACT_CMD") or shutil.which("tesseract")
-        if tess:
-            pytesseract.pytesseract.tesseract_cmd = tess
+        pytesseract.pytesseract.tesseract_cmd = r'E:\programs\tesseract.exe'
 
     def setup_logging(self):
         """Настройка журналирования в файл и консоль"""
@@ -104,36 +101,27 @@ class SmartFuelOCR:
         if duplicate_hash:
             return True, f"Файл с хэшем {img_hash} уже обрабатывался (ID: {duplicate_hash.id})"
 
-        dt_obj = self._parse_receipt_datetime(structured_data)
+        # Проверка бизнес-логики (Номер чека, Дата, Количество)
+        try:
+            # Превращаем строку даты/времени из OCR в объект datetime для сравнения
+            # В ReceiptData должны быть поля date, time, quantity, receipt_number
+            dt_str = f"{structured_data.date} {structured_data.time}"
+            dt_obj = datetime.strptime(dt_str, "%d.%m.%Y %H:%M:%S")  # Формат зависит от вашего ReceiptData
+        except (ValueError, TypeError):
+            dt_obj = None
 
-        duplicate_biz = None
-        if structured_data.doc_number and dt_obj is not None:
-            duplicate_biz = self.db.query(FuelOperation).filter(
-                and_(
-                    FuelOperation.doc_number == structured_data.doc_number,
-                    FuelOperation.date_time == dt_obj,
-                    FuelOperation.source == "personal_receipt",
-                )
-            ).first()
+        duplicate_biz = self.db.query(FuelOperation).filter(
+            and_(
+                FuelOperation.doc_number == structured_data.doc_number,
+                FuelOperation.date_time == dt_obj,
+                FuelOperation.ocr_data['quantity'].cast(String) == str(structured_data.quantity)
+            )
+        ).first()
 
         if duplicate_biz:
             return True, f"Чек №{structured_data.doc_number} от {dt_obj} уже существует (ID: {duplicate_biz.id})"
 
         return False, ""
-
-    def _parse_receipt_datetime(self, structured_data: ReceiptData) -> datetime | None:
-        if not structured_data.date:
-            return None
-        time_part = (structured_data.time or "00:00:00").strip()
-        if len(time_part) == 5:
-            time_part = time_part + ":00"
-        dt_str = f"{structured_data.date} {time_part}"
-        for fmt in ("%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M"):
-            try:
-                return datetime.strptime(dt_str, fmt)
-            except ValueError:
-                continue
-        return None
 
     def extract_raw_text(self, processed_img: np.ndarray) -> str:
         """Извлечение текста через Tesseract"""
@@ -160,12 +148,7 @@ class SmartFuelOCR:
             "format_instructions": self.parser.get_format_instructions()
         })
 
-    def run_pipeline(
-        self,
-        image_path: str,
-        telegram_user_id: int | None = None,
-        presumed_user_id: int | None = None,
-    ):
+    def run_pipeline(self, image_path: str, telegram_user_id: int = None):
         self.logger.info(f"Начало обработки: {image_path}")
 
         img_hash = self._get_image_hash(image_path)
@@ -197,27 +180,21 @@ class SmartFuelOCR:
             full_ocr_json['image_hash'] = img_hash
             full_ocr_json['raw_text_debug'] = raw_text
 
-            dt_op = self._parse_receipt_datetime(structured_data)
-            if dt_op is None:
-                dt_op = datetime.now(timezone.utc)
-
             new_op = FuelOperation(
-                source="personal_receipt",
+                source='personal_receipt',
                 ocr_data=full_ocr_json,
                 doc_number=structured_data.doc_number,
-                date_time=dt_op,
+                # Преобразуем дату для колонки date_time
+                date_time=datetime.strptime(f"{structured_data.date} {structured_data.time}", "%d.%m.%Y %H:%M:%S"),
                 status="new",
-                imported_at=datetime.now(timezone.utc),
-                presumed_user_id=presumed_user_id,
+                imported_at=datetime.now(timezone.utc)
             )
 
             self.db.add(new_op)
-            self.db.flush()
+            self.db.flush()  # Получаем ID операции
 
             self.logger.info(f"Операция успешно создана. ID: {new_op.id}")
             self.db.commit()
-
-            full_ocr_json["id"] = new_op.id
             return full_ocr_json
 
         except Exception as e:
