@@ -84,10 +84,45 @@ def get_ocr_confirm_kb(op_id: int) -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
+
+def get_ocr_edit_choice_kb(op_id: int) -> InlineKeyboardMarkup:
+    """После «Исправить»: вручную или новое фото."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="⌨️ Ввести вручную", callback_data=f"receipt_manual_{op_id}"),
+        InlineKeyboardButton(text="📸 Новое фото", callback_data=f"receipt_photo_retry_{op_id}"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌ Отменить", callback_data=f"ocr_cancel_{op_id}"),
+    )
+    return builder.as_markup()
+
+
+def get_manual_receipt_cancel_kb(op_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="❌ Отменить ввод", callback_data=f"ocr_cancel_{op_id}"))
+    return builder.as_markup()
+
 def get_car_selection_kb(cars: list) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for car in cars:
-        builder.row(InlineKeyboardButton(text=f"🚗 {getattr(car, 'gov_number', car)}", callback_data=f"select_car_{getattr(car, 'id', 0)}"))
+        plate = getattr(car, "plate", None) or str(car)
+        cid = getattr(car, "id", 0)
+        builder.row(
+            InlineKeyboardButton(text=f"🚗 {plate}", callback_data=f"select_car_{cid}")
+        )
+    return builder.as_markup()
+
+
+def get_personal_car_pick_kb(cars: list) -> InlineKeyboardMarkup:
+    """Выбор авто из справочника при нескольких совпадениях по госномеру (личные средства)."""
+    builder = InlineKeyboardBuilder()
+    for car in cars:
+        plate = getattr(car, "plate", None) or str(car)
+        cid = getattr(car, "id", 0)
+        builder.row(
+            InlineKeyboardButton(text=f"🚗 {plate}", callback_data=f"personal_car_{cid}")
+        )
     return builder.as_markup()
 
 def get_fuel_card_confirm_kb(op_id: int) -> InlineKeyboardMarkup:

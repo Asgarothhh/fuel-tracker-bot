@@ -10,6 +10,9 @@ CODE_LENGTH = int(os.getenv("CODE_LENGTH", "6"))
 CODE_TTL_HOURS = int(os.getenv("CODE_TTL_HOURS", "24"))
 ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
 
+# Приветствие при первом /start (если файл есть — отправляется фото)
+WELCOME_BANNER_PATH = (os.getenv("WELCOME_BANNER_PATH") or "").strip()
+
 # --- Белоруснефть API ---
 BEL_PASSWORD = os.getenv("BEL_PASSWORD")
 BEL_EMITENT_ID = os.getenv("BEL_EMITENT_ID")

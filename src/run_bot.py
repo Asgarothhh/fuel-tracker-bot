@@ -6,7 +6,7 @@ from aiogram.types import BotCommand
 from src.app.config import BOT_TOKEN
 from src.app.bot import register_handlers
 from src.app.scheduler import init_scheduler, schedule_daily_import
-from src.app.db import get_db_session
+from src.app.db import get_db_session, init_db
 from src.app.models import Schedule
 
 logging.basicConfig(
@@ -21,6 +21,8 @@ async def main():
 
     # Регистрируем обработчики из модуля
     register_handlers(dp)
+
+    init_db()
 
     # Рекомендуемые команды (опционально) — добавляем команды для управления расписанием
     try:

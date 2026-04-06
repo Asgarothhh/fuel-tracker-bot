@@ -1,3 +1,13 @@
 /.venv
 /.idea
 .env
+prototiping/.env
+prototiping/.last_prototype_trace.json
+exports/welcome_shown.json
+ocr_processing.log
+temp_ocr/
+
+# Python bytecode (любой каталог)
+__pycache__/
+*.py[cod]
+*$py.class
