@@ -49,6 +49,20 @@ ADMIN_HELP_TEXT = (
     "• «Экспорт в Excel» — выгрузка всех операций в файл."
 )
 
+
+def _ocr_text(op: FuelOperation) -> str:
+    """Колонка OCR: сырой текст — в `raw_text_debug` (как в excel_export)."""
+    if not op.ocr_data:
+        return ""
+    if isinstance(op.ocr_data, dict):
+        return (
+            op.ocr_data.get("raw_text_debug")
+            or op.ocr_data.get("raw_text")
+            or op.ocr_data.get("text")
+            or ""
+        )
+    return str(op.ocr_data)
+
 @require_permission("admin:manage")
 async def cmd_admin_help(message: types.Message):
     await message.reply(ADMIN_HELP_TEXT, parse_mode="HTML")
@@ -161,14 +175,24 @@ async def btn_export_excel(message: types.Message):
             api = op.api_data if isinstance(op.api_data, dict) else {}
             row_inner = api.get("row") if isinstance(api.get("row"), dict) else {}
             card_o = api.get("card") if isinstance(api.get("card"), dict) else {}
+            ocr = op.ocr_data if isinstance(op.ocr_data, dict) else {}
 
-            card = api.get("cardNumber") or card_o.get("cardNumber") or "—"
-            pname = api.get("productName") or row_inner.get("productName") or "—"
-            pq = api.get("productQuantity") or row_inner.get("productQuantity") or 0
-            cost = api.get("productCost") or row_inner.get("productCost") or 0
-            azs = api.get("azsNumber") or row_inner.get("azsNumber") or row_inner.get("AzsCode") or "—"
-            car_api = op.car_from_api or api.get("carNum") or row_inner.get("carNum") or "—"
-            drv = api.get("driverName") or row_inner.get("driverName") or "—"
+            if op.source == "personal_receipt":
+                card = "—"
+                pname = ocr.get("fuel_type") or "—"
+                pq = ocr.get("quantity") if ocr.get("quantity") not in (None, "") else "—"
+                cost = ocr.get("total_sum") if ocr.get("total_sum") not in (None, "") else "—"
+                azs = ocr.get("azs_number") or "—"
+                car_api = op.actual_car or "—"
+                drv = "—"
+            else:
+                card = api.get("cardNumber") or card_o.get("cardNumber") or "—"
+                pname = api.get("productName") or row_inner.get("productName") or "—"
+                pq = api.get("productQuantity") or row_inner.get("productQuantity") or 0
+                cost = api.get("productCost") or row_inner.get("productCost") or 0
+                azs = api.get("azsNumber") or row_inner.get("azsNumber") or row_inner.get("AzsCode") or "—"
+                car_api = op.car_from_api or api.get("carNum") or row_inner.get("carNum") or "—"
+                drv = api.get("driverName") or row_inner.get("driverName") or "—"
 
             presumed = db.query(User).filter_by(id=op.presumed_user_id).first() if op.presumed_user_id else None
             confirmed = db.query(User).filter_by(id=op.confirmed_user_id).first() if op.confirmed_user_id else None
@@ -176,8 +200,17 @@ async def btn_export_excel(message: types.Message):
             fuel_type = "Топливная карта" if op.source == "api" else "Личные средства"
             dt = op.date_time
 
-            presumed_name = presumed.full_name if presumed else "—"
-            confirmed_name = confirmed.full_name if confirmed else "—"
+            is_personal = op.source == "personal_receipt"
+            if is_personal:
+                presumed_name = "—"
+                confirmed_name = presumed.full_name if presumed else "—"
+                final_confirmer = "—"
+                confirmed_dt = "—"
+            else:
+                presumed_name = presumed.full_name if presumed else "—"
+                confirmed_name = confirmed.full_name if confirmed else "—"
+                final_confirmer = confirmed.full_name if confirmed else "—"
+                confirmed_dt = op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—"
             current_status = status_ru.get(op.status, op.status or "—")
 
             row_data = [
@@ -185,11 +218,11 @@ async def btn_export_excel(message: types.Message):
                 dt.strftime("%d.%m.%Y") if dt else "—",
                 dt.strftime("%H:%M:%S") if dt else "—",
                 card, pname, pq, cost, azs, op.doc_number or "—",
-                car_api, drv, "",
+                car_api, drv, _ocr_text(op),
                 presumed_name, confirmed_name, op.actual_car or car_api,
-                presumed_name, confirmed_name,
+                presumed_name, final_confirmer,
                 current_status,
-                op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—",
+                confirmed_dt,
                 "", "Да" if op.status == "confirmed" else "Нет"
             ]
 
@@ -329,7 +362,7 @@ async def cmd_run_import_now(message: types.Message):
                     source="api",
                     api_data=op.get("raw") or op,
                     imported_at=datetime.now(timezone.utc),
-                    status="loaded",
+                    status="loaded_from_api",
                 )
                 if doc: new_op.doc_number = doc
                 if dt_obj: new_op.date_time = dt_obj

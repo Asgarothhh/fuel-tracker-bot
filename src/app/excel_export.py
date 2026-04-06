@@ -80,12 +80,13 @@ def _first_confirmation_sender_name(db, op_id: int) -> str:
 
 
 def _ocr_text(op: FuelOperation) -> str:
+    """Колонка OCR: сырой текст из чека — в БД хранится в `raw_text_debug` (Tesseract)."""
     if not op.ocr_data:
         return ""
     if isinstance(op.ocr_data, dict):
         return (
-            op.ocr_data.get("raw_text")
-            or op.ocr_data.get("raw_text_debug")
+            op.ocr_data.get("raw_text_debug")
+            or op.ocr_data.get("raw_text")
             or op.ocr_data.get("text")
             or ""
         )
@@ -101,10 +102,10 @@ def _operation_row(db, op):
     if op.source == "personal_receipt":
         card = "—"
         pname = ocr.get("fuel_type") or "—"
-        pq = ocr.get("quantity") if ocr.get("quantity") is not None else 0
-        cost = ocr.get("total_sum") if ocr.get("total_sum") not in (None, "") else 0
+        pq = ocr.get("quantity") if ocr.get("quantity") not in (None, "") else "—"
+        cost = ocr.get("total_sum") if ocr.get("total_sum") not in (None, "") else "—"
         azs = ocr.get("azs_number") or "—"
-        car_api = "—"
+        car_api = op.actual_car or "—"
         drv = "—"
     else:
         card = api.get("cardNumber") or card_o.get("cardNumber") or "—"
@@ -120,6 +121,21 @@ def _operation_row(db, op):
 
     dt = op.date_time
     fuel_type = "Топливная карта" if op.source == "api" else "Личные средства"
+    # Для листа "личные средства":
+    # - "Предполагаемый" всегда прочерк
+    # - "Фактический" = отправитель чека (presumed_user_id)
+    # - "Кто окончательно подтвердил" = прочерк
+    # - "Дата подтверждения" = прочерк
+    if op.source == "personal_receipt":
+        presumed_name = "—"
+        factual_name = presumed.full_name if presumed else "—"
+        final_confirmer = "—"
+        confirmed_dt = "—"
+    else:
+        presumed_name = presumed.full_name if presumed else "—"
+        factual_name = confirmed.full_name if confirmed else "—"
+        final_confirmer = confirmed.full_name if confirmed else "—"
+        confirmed_dt = op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—"
 
     # Возвращаем список из 23 колонок согласно ТЗ
     return [
@@ -132,13 +148,13 @@ def _operation_row(db, op):
         op.doc_number or "—",                       # Чек
         car_api, drv,                               # Авто(API), Водитель(API)
         _ocr_text(op),                              # Данные OCR
-        presumed.full_name if presumed else "—",    # Предполагаемый
-        confirmed.full_name if confirmed else "—",  # Фактический
+        presumed_name,                               # Предполагаемый
+        factual_name,                                # Фактический
         op.actual_car or car_api,                   # Факт.Авто
         _first_confirmation_sender_name(db, op.id),
-        confirmed.full_name if confirmed else "—",  # Окончательно подтвердил
+        final_confirmer,                             # Окончательно подтвердил
         STATUS_RU.get(op.status, op.status or "—"), # Статус (РУССКИЙ)
-        op.confirmed_at.strftime("%d.%m.%Y %H:%M") if op.confirmed_at else "—", # Дата подтв
+        confirmed_dt,                                # Дата подтв
         "",                                         # Примечание
         "Да" if op.status == "confirmed" else "Нет" # Готовность
     ]
@@ -189,7 +205,7 @@ def export_to_excel_final(op_id: int) -> None:
             return
 
         st = op.status or ""
-        disputed = st in ("requires_manual", "rejected_by_other", "import_error")
+        disputed = st in ("requires_manual", "rejected_by_other", "import_error", "disputed")
 
         if disputed:
             if getattr(op, "exported_disputed_excel", False):

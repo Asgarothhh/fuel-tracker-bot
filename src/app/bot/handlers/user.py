@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import hashlib
 import logging
@@ -22,7 +23,7 @@ from src.app.bot.keyboards import (
     BTN_USER_PROFILE,
     BTN_USER_SEND_CHECK,
     get_fuel_card_confirm_kb,
-    get_manual_receipt_cancel_kb,
+    get_manual_receipt_actions_kb,
     get_ocr_confirm_kb,
     get_ocr_edit_choice_kb,
     get_personal_car_pick_kb,
@@ -43,6 +44,24 @@ from src.ocr.engine import SmartFuelOCR
 from src.ocr.schemas import ReceiptData
 
 logger = logging.getLogger("bot.user")
+OCR_PIPELINE_TIMEOUT_SEC = int(os.environ.get("OCR_PIPELINE_TIMEOUT_SEC", "180"))
+
+
+def _create_manual_draft_op(telegram_id: int) -> int | None:
+    """Создает черновик чека, чтобы открыть ручной ввод из ошибки OCR."""
+    with get_db_session() as db:
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        op = FuelOperation(
+            source="personal_receipt",
+            ocr_data={},
+            status="new",
+            imported_at=datetime.datetime.now(datetime.timezone.utc),
+            presumed_user_id=user.id if user else None,
+        )
+        db.add(op)
+        db.flush()
+        db.commit()
+        return op.id
 
 
 class RegistrationStates(StatesGroup):
@@ -227,7 +246,7 @@ async def cmd_pending(message: types.Message):
         # Либо, если у вас в FuelOperation есть поле вроде assumed_user_id:
 
         pending_ops = db.query(FuelOperation).filter(
-            FuelOperation.status.in_(["new", "loaded", "pending"]),
+            FuelOperation.status.in_(["new", "loaded", "loaded_from_api", "pending"]),
             # Замените assumed_user_id на ваше поле, если оно называется иначе (например, target_user_id)
             # В ТЗ указано "предполагаемый пользователь"
             FuelOperation.presumed_user_id == user.id
@@ -359,28 +378,45 @@ async def handle_receipt_photo(message: types.Message, state: FSMContext):
         return
 
     photo = message.photo[-1]
-    file_info = await message.bot.get_file(photo.file_id)
-
-    # Создаем временную директорию
-    os.makedirs("temp_ocr", exist_ok=True)
-    file_path = f"temp_ocr/{photo.file_id}.jpg"
-    await message.bot.download_file(file_info.file_path, file_path)
-
     msg_wait = await message.answer("⏳ Распознаю данные чека (это может занять до 10 сек)...")
+    file_path = ""
 
     try:
+        file_info = await message.bot.get_file(photo.file_id)
+
+        # Создаем временную директорию
+        os.makedirs("temp_ocr", exist_ok=True)
+        file_path = f"temp_ocr/{photo.file_id}.jpg"
+        await message.bot.download_file(file_info.file_path, file_path)
+
         with get_db_session() as db:
             user = db.query(User).filter(User.telegram_id == message.from_user.id).first()
             presumed_id = user.id if user else None
             processor = SmartFuelOCR(db)
-            ocr_result = processor.run_pipeline(
-                file_path,
-                telegram_user_id=message.from_user.id,
-                presumed_user_id=presumed_id,
+            ocr_result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    processor.run_pipeline,
+                    file_path,
+                    telegram_user_id=message.from_user.id,
+                    presumed_user_id=presumed_id,
+                ),
+                timeout=OCR_PIPELINE_TIMEOUT_SEC,
             )
 
         if not ocr_result:
-            await message.answer("❌ Не удалось распознать чек. Попробуйте сделать фото четче.")
+            draft_op_id = _create_manual_draft_op(message.from_user.id)
+            if draft_op_id:
+                await message.answer(
+                    "❌ Не удалось распознать чек автоматически.\n"
+                    "Причина может быть во временной ошибке OCR/LLM.\n"
+                    "Вы можете сразу продолжить через ручной ввод:",
+                    reply_markup=get_ocr_edit_choice_kb(draft_op_id),
+                )
+            else:
+                await message.answer(
+                    "❌ Не удалось распознать чек автоматически.\n"
+                    "Причина может быть во временной ошибке OCR/LLM."
+                )
             await state.clear()
             return
 
@@ -407,12 +443,22 @@ async def handle_receipt_photo(message: types.Message, state: FSMContext):
         await state.set_state(ReceiptStates.waiting_for_confirmation)
         await message.answer(text, reply_markup=get_ocr_confirm_kb(op_id), parse_mode="Markdown")
 
+    except asyncio.TimeoutError:
+        logger.error("OCR Timeout: file_id=%s timeout=%s", photo.file_id, OCR_PIPELINE_TIMEOUT_SEC)
+        await message.answer(
+            "❌ Превышено время ожидания распознавания.\n"
+            "Попробуйте отправить фото повторно или используйте ручной ввод."
+        )
+        await state.clear()
     except Exception as e:
         logger.error(f"OCR Error: {e}")
-        await message.answer("❌ Произошла ошибка при обработке чека.")
+        await message.answer(
+            "❌ Произошла ошибка при обработке чека.\n"
+            "Попробуйте отправить фото ещё раз или воспользуйтесь ручным вводом."
+        )
         await state.clear()
     finally:
-        if os.path.exists(file_path):
+        if file_path and os.path.exists(file_path):
             os.remove(file_path)
         await msg_wait.delete()
 
@@ -432,9 +478,27 @@ MANUAL_RECEIPT_HELP = """⌨️ **Ввод данных чека вручную*
 ```
 
 **Обязательно:** топливо, литры, номер чека, дата, время.  
-**По желанию:** сумма, АЗС.
+**По желанию:** сумма, АЗС."""
 
-Допустимы подписи на латинице: `Fuel`, `Quantity`, `Sum`, `Doc`, `AZS`, `Date`, `Time`."""
+
+def _manual_prefill_from_operation(op: FuelOperation) -> str:
+    ocr = op.ocr_data if isinstance(op.ocr_data, dict) else {}
+    date_s = ocr.get("date")
+    time_s = ocr.get("time")
+    if (not date_s or not time_s) and op.date_time:
+        date_s = date_s or op.date_time.strftime("%d.%m.%Y")
+        time_s = time_s or op.date_time.strftime("%H:%M:%S")
+    return "\n".join(
+        [
+            f"Топливо: {ocr.get('fuel_type') or ''}",
+            f"Литры: {ocr.get('quantity') or ''}",
+            f"Сумма: {ocr.get('total_sum') or ''}",
+            f"Чек: {ocr.get('doc_number') or op.doc_number or ''}",
+            f"АЗС: {ocr.get('azs_number') or ''}",
+            f"Дата: {date_s or ''}",
+            f"Время: {time_s or ''}",
+        ]
+    )
 
 
 def _normalize_manual_key(key: str) -> str:
@@ -543,21 +607,60 @@ def _can_edit_personal_receipt_op(db, op: FuelOperation, telegram_id: int) -> bo
     return True
 
 
+def _ensure_profile_cars_for_user(db, user: User) -> list[dict]:
+    """Готовит список авто из профиля в виде простых dict (без ORM-связи)."""
+    plates = [normalize_plate(p or "") for p in (user.cars or [])]
+    plates = [p for p in plates if p]
+    if not plates:
+        return []
+
+    cars_by_plate: dict[str, Car] = {c.plate: c for c in db.query(Car).filter(Car.plate.in_(plates)).all()}
+    out: list[Car] = []
+    changed = False
+    for plate in plates:
+        car = cars_by_plate.get(plate)
+        if not car:
+            car = Car(plate=plate)
+            db.add(car)
+            db.flush()
+            cars_by_plate[plate] = car
+            changed = True
+        out.append(car)
+
+    if changed:
+        db.commit()
+        # После commit ORM-объекты могут стать detached/expired;
+        # для UI возвращаем только простые значения.
+        return [{"id": c.id, "plate": c.plate} for c in out]
+    return [{"id": c.id, "plate": c.plate} for c in out]
+
+
 async def callback_ocr_confirm(call: types.CallbackQuery, state: FSMContext):
-    """Подтверждение OCR → ввод госномера и проверка по справочнику авто (ТЗ 8.2 п.6–7)."""
+    """Подтверждение OCR -> выбор авто из профиля пользователя."""
     op_id = int(call.data.split("_")[-1])
     with get_db_session() as db:
         op = db.query(FuelOperation).get(op_id)
         if not _can_edit_personal_receipt_op(db, op, call.from_user.id):
             await call.answer("Операция недоступна.", show_alert=True)
             return
+        user = db.query(User).filter(User.telegram_id == call.from_user.id).first()
+        if not user or not user.cars:
+            await call.message.answer("У вас в профиле нет привязанных авто. Обратитесь к администратору.")
+            await state.clear()
+            await call.answer()
+            return
+        cars_list = _ensure_profile_cars_for_user(db, user)
+        if not cars_list:
+            await call.message.answer("Не удалось подготовить список авто из профиля. Обратитесь к администратору.")
+            await state.clear()
+            await call.answer()
+            return
 
     await state.update_data(op_id=op_id)
-    await state.set_state(ReceiptStates.waiting_for_personal_car_plate)
+    await state.set_state(ReceiptStates.waiting_for_confirmation)
     await call.message.edit_text(
-        "🚗 Введите **государственный номер** автомобиля "
-        "(как в справочнике: допускаются пробелы и дефисы, например `1234 AB-7`).",
-        parse_mode="Markdown",
+        "🚗 Выберите автомобиль:",
+        reply_markup=get_personal_car_pick_kb(cars_list),
     )
     await call.answer()
 
@@ -586,13 +689,43 @@ async def callback_receipt_manual(call: types.CallbackQuery, state: FSMContext):
         if not _can_edit_personal_receipt_op(db, op, call.from_user.id):
             await call.answer("Операция недоступна.", show_alert=True)
             return
+        prefill_text = _manual_prefill_from_operation(op)
 
     await state.update_data(op_id=op_id)
     await state.set_state(ReceiptStates.waiting_for_manual_receipt_text)
     await call.message.edit_text(
-        MANUAL_RECEIPT_HELP,
+        MANUAL_RECEIPT_HELP + f"\n\n**Текущие значения этого чека:**\n\n```text\n{prefill_text}\n```",
         parse_mode="Markdown",
-        reply_markup=get_manual_receipt_cancel_kb(op_id),
+        reply_markup=get_manual_receipt_actions_kb(op_id),
+    )
+    await call.answer()
+
+
+async def callback_receipt_manual_confirm(call: types.CallbackQuery, state: FSMContext):
+    op_id = int(call.data.split("_")[-1])
+    with get_db_session() as db:
+        op = db.query(FuelOperation).get(op_id)
+        if not _can_edit_personal_receipt_op(db, op, call.from_user.id):
+            await call.answer("Операция недоступна.", show_alert=True)
+            return
+        user = db.query(User).filter(User.telegram_id == call.from_user.id).first()
+        if not user or not user.cars:
+            await call.message.answer("У вас в профиле нет привязанных авто. Обратитесь к администратору.")
+            await state.clear()
+            await call.answer()
+            return
+        cars_list = _ensure_profile_cars_for_user(db, user)
+        if not cars_list:
+            await call.message.answer("Не удалось подготовить список авто из профиля. Обратитесь к администратору.")
+            await state.clear()
+            await call.answer()
+            return
+
+    await state.update_data(op_id=op_id)
+    await state.set_state(ReceiptStates.waiting_for_confirmation)
+    await call.message.edit_text(
+        "✅ Данные чека подтверждены.\n\n🚗 Выберите автомобиль:",
+        reply_markup=get_personal_car_pick_kb(cars_list),
     )
     await call.answer()
 
@@ -721,29 +854,11 @@ async def process_personal_car_plate(message: types.Message, state: FSMContext):
     if not norm:
         await message.answer("Введите непустой госномер.")
         return
-
-    with get_db_session() as db:
-        matches = find_cars_by_normalized_plate(db, norm)
-
-    if not matches:
-        await message.answer(
-            "❌ Автомобиль с таким номером **не найден** в справочнике. "
-            "Проверьте номер или обратитесь к администратору. Введите номер снова:"
-        )
-        return
-
-    if len(matches) == 1:
-        await state.update_data(selected_car_plate=matches[0].plate, selected_car_id=matches[0].id)
-        await state.set_state(ReceiptStates.waiting_for_personal_fueler)
-        await message.answer(
-            "👤 Кто **фактически заправлялся**? Введите **ФИО** сотрудника (как в базе организации):",
-            parse_mode="Markdown",
-        )
-        return
-
+    await state.update_data(selected_car_plate=norm, selected_car_id=None)
+    await state.set_state(ReceiptStates.waiting_for_personal_fueler)
     await message.answer(
-        "Найдено несколько записей с таким номером. Выберите автомобиль:",
-        reply_markup=get_personal_car_pick_kb(matches),
+        "👤 Кто **фактически заправлялся**? Введите **ФИО** сотрудника (как в базе организации):",
+        parse_mode="Markdown",
     )
 
 
@@ -777,6 +892,7 @@ async def process_personal_fueler_name(message: types.Message, state: FSMContext
             return
 
         fueler = candidates[0]
+        fueler_name = fueler.full_name
         op = db.query(FuelOperation).get(op_id)
         if not op or op.source != "personal_receipt":
             await message.answer("Операция не найдена.")
@@ -801,7 +917,7 @@ async def process_personal_fueler_name(message: types.Message, state: FSMContext
                 to_user_id=fueler.id,
                 answer="confirmed",
                 stage_result=(
-                    f"Личные средства: авто {car_plate}, заправлялся {fueler.full_name}"
+                    f"Личные средства: авто {car_plate}, заправлялся {fueler_name}"
                 ),
             )
         )
@@ -819,7 +935,7 @@ async def process_personal_fueler_name(message: types.Message, state: FSMContext
             return
 
     await message.answer(
-        f"✅ Заправка учтена: авто **{car_plate}**, заправлялся **{fueler.full_name}**. "
+        f"✅ Заправка учтена: авто **{car_plate}**, заправлялся **{fueler_name}**. "
         f"Строка добавлена в Excel (лист «Заправки_личные_средства»).",
         parse_mode="Markdown",
     )
@@ -1131,7 +1247,8 @@ def register_user_handlers(dp):
     dp.callback_query.register(callback_fuel_card_reject, F.data.startswith("fuel_card_no_"))
     dp.callback_query.register(callback_ocr_confirm, F.data.startswith("ocr_confirm_"))
     dp.callback_query.register(callback_ocr_edit, F.data.startswith("ocr_edit_"))
-    dp.callback_query.register(callback_receipt_manual, F.data.startswith("receipt_manual_"))
+    dp.callback_query.register(callback_receipt_manual, F.data.startswith("receipt_manual_edit_"))
+    dp.callback_query.register(callback_receipt_manual_confirm, F.data.startswith("receipt_manual_confirm_"))
     dp.callback_query.register(callback_receipt_photo_retry, F.data.startswith("receipt_photo_retry_"))
     dp.callback_query.register(callback_ocr_cancel, F.data.startswith("ocr_cancel_"))
     dp.callback_query.register(callback_select_personal_car, F.data.startswith("personal_car_"))

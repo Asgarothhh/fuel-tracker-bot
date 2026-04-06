@@ -26,7 +26,7 @@ load_dotenv()
 
 
 class SmartFuelOCR:
-    def __init__(self, db_session: Session, model_name: str = "nvidia/nemotron-3-super-120b-a12b:free"):
+    def __init__(self, db_session: Session, model_name: str = "qwen/qwen3.6-plus:free"):
         self.db = db_session
         self.setup_logging()
 
