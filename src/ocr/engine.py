@@ -2,6 +2,7 @@ import hashlib
 import os
 import logging
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,7 +37,9 @@ class SmartFuelOCR:
             temperature=0
         )
         self.parser = PydanticOutputParser(pydantic_object=ReceiptData)
-        pytesseract.pytesseract.tesseract_cmd = r'E:\programs\tesseract.exe'
+        tess = os.environ.get("TESSERACT_CMD") or shutil.which("tesseract")
+        if tess:
+            pytesseract.pytesseract.tesseract_cmd = tess
 
     def setup_logging(self):
         """Настройка журналирования в файл и консоль"""
@@ -195,6 +198,7 @@ class SmartFuelOCR:
 
             self.logger.info(f"Операция успешно создана. ID: {new_op.id}")
             self.db.commit()
+            full_ocr_json["id"] = new_op.id
             return full_ocr_json
 
         except Exception as e:

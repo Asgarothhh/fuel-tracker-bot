@@ -398,7 +398,6 @@ async def handle_receipt_photo(message: types.Message, state: FSMContext):
                     processor.run_pipeline,
                     file_path,
                     telegram_user_id=message.from_user.id,
-                    presumed_user_id=presumed_id,
                 ),
                 timeout=OCR_PIPELINE_TIMEOUT_SEC,
             )
@@ -427,6 +426,29 @@ async def handle_receipt_photo(message: types.Message, state: FSMContext):
 
         # Успех: сохраняем ID операции в FSM
         op_id = ocr_result.get('id')
+        if not op_id:
+            img_hash = ocr_result.get("image_hash") if isinstance(ocr_result, dict) else None
+            with get_db_session() as db:
+                op = None
+                if img_hash:
+                    op = (
+                        db.query(FuelOperation)
+                        .filter(FuelOperation.source == "personal_receipt")
+                        .filter(cast(FuelOperation.ocr_data['image_hash'], String) == str(img_hash))
+                        .order_by(FuelOperation.id.desc())
+                        .first()
+                    )
+                if op and presumed_id and not op.presumed_user_id:
+                    op.presumed_user_id = presumed_id
+                    db.commit()
+                op_id = op.id if op else None
+
+        if not op_id:
+            await message.answer(
+                "❌ Чек распознан, но не удалось получить ID операции. Попробуйте ещё раз."
+            )
+            await state.clear()
+            return
         await state.update_data(op_id=op_id)
 
         text = (
