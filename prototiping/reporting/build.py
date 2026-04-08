@@ -24,7 +24,7 @@ os.environ.setdefault("BEL_PASSWORD", "dummy")
 os.environ.setdefault("BEL_EMITENT_ID", "1")
 os.environ.setdefault("BEL_CONTRACT_ID", "1")
 
-from prototiping.checks.scenarios import SCENARIO_META
+from prototiping.checks.scenarios import SCENARIO_META, SCENARIO_SCHEMA_VERSION
 from prototiping.lib.paths import GRAPH_PREVIEW_HTML, REPORT_MD, REPORT_TEMPLATE, TRACE_JSON
 
 
@@ -170,7 +170,17 @@ def collect_results_from_trace(trace_full: dict) -> list[dict]:
             fn_name = c["fn"]
             meta = SCENARIO_META.get(fn_name)
             if not meta:
-                raise KeyError(f"Добавьте описание в checks/scenarios.py для {fn_name}")
+                meta = {
+                    "id": f"LEGACY-{run_order:02d}",
+                    "graph_node": nid,
+                    "title": f"[legacy] {fn_name}",
+                    "code_under_test": "— (нет метаданных, добавьте в `checks/scenarios.py`)",
+                    "description": "Сценарий выполнен, но метаданные отсутствуют; отчёт собран в режиме совместимости.",
+                    "kind": "standard",
+                    "scenario_version": "legacy",
+                }
+            kind = str(meta.get("kind", "standard"))
+            scenario_version = str(meta.get("scenario_version", SCENARIO_SCHEMA_VERSION))
             rows.append(
                 {
                     **meta,
@@ -179,9 +189,50 @@ def collect_results_from_trace(trace_full: dict) -> list[dict]:
                     "ok": c["ok"],
                     "detail": c["detail"],
                     "run_order": run_order,
+                    "kind": kind,
+                    "scenario_version": scenario_version,
+                    "expected_class": "N" if kind == "breaker" else "P",
+                    "actual_sign": "-" if c["ok"] is False else "+",
+                    "is_correct": bool(c.get("is_correct", c["ok"])),
+                    "is_legacy_version": scenario_version != SCENARIO_SCHEMA_VERSION,
                 }
             )
     return rows
+
+
+def compute_confusion(rows: list[dict]) -> dict[str, int]:
+    """Считает TP/FN/TN/FP по типу сценария и фактическому результату.
+
+    - standard: ожидаем ``ok=True``  -> TP/FN
+    - breaker:  ожидаем ``ok=False`` -> TN/FP
+    """
+    tp = fn = tn = fp = 0
+    for r in rows:
+        kind = r.get("kind", "standard")
+        ok = bool(r.get("ok"))
+        if kind == "breaker":
+            if ok:
+                fp += 1
+            else:
+                tn += 1
+            continue
+        if ok:
+            tp += 1
+        else:
+            fn += 1
+    return {"TP": tp, "FN": fn, "TN": tn, "FP": fp}
+
+
+def build_confusion_matrix_md(cm: dict[str, int]) -> str:
+    """Матрица классификации P/N как в классическом 2x2 виде."""
+    return "\n".join(
+        [
+            "| predicted \\ actual | P (+) | N (-) |",
+            "|---|---:|---:|",
+            f"| **P** (ожидаем PASS) | **TP = {cm['TP']}** | **FN = {cm['FN']}** |",
+            f"| **N** (ожидаем FAIL) | **FP = {cm['FP']}** | **TN = {cm['TN']}** |",
+        ]
+    )
 
 
 def _escape_md_cell(s: str) -> str:
@@ -219,18 +270,23 @@ def build_table(rows: list[dict]) -> str:
         True
     """
     lines = [
-        "| № | Код | Узел графа | Сценарий | Проверяемый код | Корректно | При ошибке |",
-        "|---|-----|------------|----------|-----------------|-----------|------------|",
+        "| № | Код | Класс | Факт | Тип | Версия | Узел графа | Сценарий | Проверяемый код | Корректно | При ошибке |",
+        "|---|-----|-------|------|-----|--------|------------|----------|-----------------|-----------|------------|",
     ]
     for i, row in enumerate(rows, start=1):
-        ok_cell = "да" if row["ok"] else "**нет**"
-        err_hint = "—" if row["ok"] else _escape_md_cell((row["detail"] or "")[:120])
+        is_correct = bool(row.get("is_correct"))
+        ok_cell = "да" if is_correct else "**нет**"
+        err_hint = "—" if is_correct else _escape_md_cell((row["detail"] or "")[:120])
         code_cell = _escape_md_cell(row["code_under_test"])
         ro = row.get("run_order", i)
         lines.append(
-            "| {ro} | {sid} | `{node}` | {title} | {code} | {ok} | {err} |".format(
+            "| {ro} | {sid} | {cls} | {fact} | {kind} | {ver} | `{node}` | {title} | {code} | {ok} | {err} |".format(
                 ro=ro,
                 sid=row["id"],
+                cls=row.get("expected_class", "P"),
+                fact=row.get("actual_sign", "+"),
+                kind="breaker" if row.get("kind") == "breaker" else "standard",
+                ver=row.get("scenario_version", "legacy"),
                 node=row["graph_node"],
                 title=_escape_md_cell(row["title"]),
                 code=code_cell,
@@ -260,12 +316,13 @@ def build_details(rows: list[dict]) -> str:
     """
     parts: list[str] = []
     for i, row in enumerate(rows, start=1):
-        status = "**Корректно**" if row["ok"] else "**Ошибка**"
+        is_correct = bool(row.get("is_correct"))
+        status = "**Корректно**" if is_correct else "**Некорректно**"
         detail = row["detail"] or "—"
         fail_block = ""
-        if not row["ok"]:
+        if not is_correct:
             fail_block = (
-                "\n#### ❌ Ошибка проверки\n\n"
+                "\n#### ❌ Некорректная обработка сценария\n\n"
                 f"- **Текст:** `{detail}`\n"
                 f"- **Функция:** `{row['check_name']}`\n\n"
             )
@@ -273,6 +330,10 @@ def build_details(rows: list[dict]) -> str:
         parts.append(
             f"### {ro}. {row['title']}\n\n"
             f"- **Код (scenarios):** `{row['id']}`\n"
+            f"- **Класс (ожидаемо):** `{row.get('expected_class', 'P')}`\n"
+            f"- **Факт:** `{row.get('actual_sign', '+')}`\n"
+            f"- **Тип:** `{row.get('kind', 'standard')}`\n"
+            f"- **Версия сценария:** `{row.get('scenario_version', 'legacy')}`\n"
             f"- **Узел графа:** `{row['graph_node']}`\n"
             f"- **Проверяемый код:** {row['code_under_test']}\n"
             f"- **Что проверяется:** {row['description']}\n"
@@ -350,12 +411,14 @@ def render_report(*, verbose: bool = False) -> str:
 
     _step(console, "[2/7] Сопоставление с метаданными сценариев (checks/scenarios.py)…")
     rows = collect_results_from_trace(trace_full)
-    ok_count = sum(1 for r in rows if r["ok"])
+    ok_count = sum(1 for r in rows if r.get("is_correct"))
     fail_count = len(rows) - ok_count
+    cm = compute_confusion(rows)
+    legacy_count = sum(1 for r in rows if r.get("is_legacy_version"))
     if console:
         console.print(
             f"  [dim]Проверок:[/] [green]{ok_count} OK[/] / "
-            f"{'[red]' if fail_count else '[dim]'}{fail_count} FAIL[/]"
+            f"{'[red]' if fail_count else '[dim]'}{fail_count} некорректно[/]"
         )
 
     _step(console, "[3/7] Раздел «Граф» (таблица, ASCII, Mermaid)…")
@@ -386,15 +449,15 @@ def render_report(*, verbose: bool = False) -> str:
     fail_alert = ""
     if fail_count:
         fail_alert = (
-            "> ❌ **Есть проваленные сценарии:** "
+            "> ❌ **Есть некорректно обработанные сценарии:** "
             f"**{fail_count}** из {len(rows)}. "
-            "Смотрите таблицу (колонка «При ошибке») и раздел 4 с блоками **❌ Ошибка проверки**.\n"
+            "Смотрите таблицу (колонка «При ошибке») и раздел 4.\n"
         )
 
     graph_summary_line = (
         f"*Граф:* `{trace_full.get('graph', '')}` — итог прогона: "
-        f"**{'успех' if trace_full.get('overall_ok') else 'есть ошибки'}** "
-        f"({ok_count} OK / {fail_count} FAIL по проверкам).\n"
+        f"**{'корректно' if trace_full.get('overall_ok') else 'есть некорректности'}** "
+        f"({ok_count} корректно / {fail_count} некорректно по сценариям).\n"
     )
 
     out = template.replace("{{GENERATED_AT}}", generated)
@@ -403,6 +466,13 @@ def render_report(*, verbose: bool = False) -> str:
     out = out.replace("{{TOTAL}}", str(len(rows)))
     out = out.replace("{{OK_COUNT}}", str(ok_count))
     out = out.replace("{{FAIL_COUNT}}", str(fail_count))
+    out = out.replace("{{TP_COUNT}}", str(cm["TP"]))
+    out = out.replace("{{FN_COUNT}}", str(cm["FN"]))
+    out = out.replace("{{TN_COUNT}}", str(cm["TN"]))
+    out = out.replace("{{FP_COUNT}}", str(cm["FP"]))
+    out = out.replace("{{CONFUSION_MATRIX}}", build_confusion_matrix_md(cm))
+    out = out.replace("{{SCHEMA_VERSION}}", str(SCENARIO_SCHEMA_VERSION))
+    out = out.replace("{{LEGACY_SCENARIOS_COUNT}}", str(legacy_count))
     out = out.replace("{{GRAPH_VISUAL}}", graph_visual)
     out = out.replace("{{SCENARIOS_TABLE}}", build_table(rows))
     out = out.replace("{{SCENARIOS_DETAIL}}", build_details(rows))

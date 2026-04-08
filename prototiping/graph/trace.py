@@ -7,6 +7,7 @@ import json
 import sys
 import time
 
+from prototiping.checks.scenarios import SCENARIO_META
 from prototiping.graph.spec import GRAPH_NODES_SPEC, GRAPH_TITLE, verify_spec_matches_all_checks
 from prototiping.lib.paths import TRACE_JSON
 
@@ -46,21 +47,26 @@ def _print_rich_console(graph_title: str, nodes_trace: list[dict], overall_ok: b
             f"([dim]{n['elapsed_ms']} ms[/dim])"
         )
         for c in n["checks"]:
-            cstyle = "green" if c["ok"] else "red"
-            cicon = "✓" if c["ok"] else "✗"
+            cstyle = "green" if c.get("is_correct") else "red"
+            cicon = "✓" if c.get("is_correct") else "✗"
             detail = (c.get("detail") or "").replace("\n", " ")
             if len(detail) > 80:
                 detail = detail[:77] + "…"
-            branch.add(f"[{cstyle}]{cicon}[/] `{c['fn']}` — {c.get('name', '')} [dim]{detail}[/]")
+            cls = c.get("expected_class", "P")
+            fact = c.get("actual_sign", "+")
+            branch.add(
+                f"[{cstyle}]{cicon}[/] `{c['fn']}` [bold]({cls}/{fact})[/] — "
+                f"{c.get('name', '')} [dim]{detail}[/]"
+            )
 
     summary = Table(show_header=True, header_style="bold")
     summary.add_column("Узел")
-    summary.add_column("Статус")
+    summary.add_column("Корректность")
     summary.add_column("мс", justify="right")
     for n in nodes_trace:
         summary.add_row(
             n["id"],
-            "[green]OK[/]" if n["ok"] else "[red]FAIL[/]",
+            "[green]корректно[/]" if n["ok"] else "[red]некорректно[/]",
             str(n["elapsed_ms"]),
         )
 
@@ -105,27 +111,42 @@ def run_prototype_traced(*, console: bool = True, write_trace_json: bool = True)
         t0 = time.perf_counter()
         check_out: list[dict] = []
         for fn in spec["checks"]:
+            meta = SCENARIO_META.get(fn.__name__, {})
+            expected_class = "N" if meta.get("kind") == "breaker" else "P"
             if prog_console is not None:
                 prog_console.print(
                     f"  [bold yellow]▶[/] узел [cyan]{spec['id']}[/] — "
-                    f"сценарий [bold]`{fn.__name__}`[/]"
+                    f"сценарий [bold]`{fn.__name__}`[/] [dim](class={expected_class})[/]"
                 )
             elif console:
-                print(f"  ▶ [{spec['id']}] {fn.__name__} …", file=sys.stderr, flush=True)
+                print(
+                    f"  ▶ [{spec['id']}] {fn.__name__} (class={expected_class}) …",
+                    file=sys.stderr,
+                    flush=True,
+                )
             elif sys.stderr.isatty():
-                print(f"  ▶ [{spec['id']}] {fn.__name__} …", file=sys.stderr, flush=True)
+                print(
+                    f"  ▶ [{spec['id']}] {fn.__name__} (class={expected_class}) …",
+                    file=sys.stderr,
+                    flush=True,
+                )
             raw = fn()
+            ok_raw = bool(raw.get("ok"))
+            is_correct = (ok_raw is False) if expected_class == "N" else (ok_raw is True)
             entry = {
                 "fn": fn.__name__,
                 "name": raw.get("name", fn.__name__),
-                "ok": bool(raw.get("ok")),
+                "ok": ok_raw,
                 "detail": (raw.get("detail") or "").strip(),
+                "expected_class": expected_class,
+                "actual_sign": "-" if not ok_raw else "+",
+                "is_correct": is_correct,
             }
             check_out.append(entry)
             flat_results.append(raw)
 
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
-        node_ok = all(c["ok"] for c in check_out)
+        node_ok = all(c["is_correct"] for c in check_out)
         nodes_trace.append(
             {
                 "id": spec["id"],

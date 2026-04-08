@@ -15,8 +15,9 @@ import re
 import shutil
 import sys
 import traceback
+import signal
 
-from prototiping.lib.paths import EXPORT_DIR, REPORT_ASSETS, ROOT_EXPORTS_DIR
+from prototiping.lib.paths import EXPORT_DIR, REPORT_ASSETS, ROOT_DIR, ROOT_EXPORTS_DIR
 
 IMAGE_GLOBS = ("*.jpg", "*.jpeg", "*.png", "*.webp", "*.heic", "*.HEIC", "*.JPG", "*.PNG")
 
@@ -187,6 +188,13 @@ def _ocr_max_files() -> int | None:
     raw = os.environ.get("PROTOTIPE_OCR_MAX_FILES", "").strip()
     if not raw:
         return None
+
+
+def _ocr_timeout_sec() -> int | None:
+    """Таймаут одного файла OCR: ``PROTOTIPE_OCR_TIMEOUT_SEC``."""
+    raw = os.environ.get("PROTOTIPE_OCR_TIMEOUT_SEC", "").strip()
+    if not raw:
+        return None
     try:
         n = int(raw)
         return n if n > 0 else None
@@ -194,13 +202,67 @@ def _ocr_max_files() -> int | None:
         return None
 
 
-def _format_pipeline_result_md(result: dict | None) -> str:
+def _ocr_fail_fast() -> bool:
+    """Остановить OCR-секцию на первом критическом фейле.
+
+    Управляется env ``PROTOTIPE_OCR_FAIL_FAST`` (1/true/yes/on).
+    """
+    raw = os.environ.get("PROTOTIPE_OCR_FAIL_FAST", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+    try:
+        n = int(raw)
+        return n if n > 0 else None
+    except ValueError:
+        return None
+
+
+def _extract_ocr_log_context(src: Path, max_lines: int = 14) -> str:
+    """Возвращает релевантный кусок ``ocr_processing.log`` по конкретному файлу."""
+    log_path = ROOT_DIR / "ocr_processing.log"
+    if not log_path.is_file():
+        return ""
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    if not lines:
+        return ""
+    src_name = src.name
+    start_idx = -1
+    for i, line in enumerate(lines):
+        if "Начало обработки:" in line and (src_name in line or str(src) in line):
+            start_idx = i
+    if start_idx == -1:
+        interesting = [ln for ln in lines if "ERROR - Критическая ошибка OCR" in ln or "WARNING -" in ln]
+        if not interesting:
+            return ""
+        return "\n".join(interesting[-max_lines:])
+    end_idx = len(lines)
+    for j in range(start_idx + 1, len(lines)):
+        if "Начало обработки:" in lines[j]:
+            end_idx = j
+            break
+    chunk = lines[start_idx:end_idx]
+    if len(chunk) > max_lines:
+        chunk = chunk[-max_lines:]
+    return "\n".join(chunk)
+
+
+def _format_pipeline_result_md(result: dict | None, *, src: Path) -> str:
     """Markdown по возвращаемому значению ``run_pipeline``."""
     if result is None:
+        log_ctx = _extract_ocr_log_context(src)
+        extra = ""
+        if log_ctx:
+            extra = (
+                "\n**Фрагмент `ocr_processing.log` для этого файла:**\n\n"
+                f"```text\n{_truncate(log_ctx, max_len=3000)}\n```\n\n"
+            )
         return (
             "#### Результат `run_pipeline`\n\n"
             "Вернулось **`None`** (ошибка на одном из шагов или сохранения в БД). "
-            "Подробности — в логе **SmartFuelOCR** и в файле **`ocr_processing.log`**.\n\n"
+            "Ниже приложен релевантный фрагмент `ocr_processing.log`.\n\n"
+            f"{extra}"
         )
     if result.get("status") == "duplicate":
         return (
@@ -294,7 +356,13 @@ def build_ocr_section_markdown(*, console: object | None = None, use_spinner: bo
         )
 
     model = os.environ.get("OCR_MODEL_NAME", "nvidia/nemotron-3-super-120b-a12b:free")
+    timeout_sec = _ocr_timeout_sec()
+    fail_fast = _ocr_fail_fast()
     lines.append(f"*Модель LLM (OpenRouter):* `{model}`\n")
+    if timeout_sec:
+        lines.append(f"*Таймаут OCR на файл:* `{timeout_sec}s`\n")
+    if fail_fast:
+        lines.append("*Режим OCR:* `fail-fast` (остановка на первой критической ошибке)\n")
 
     from sqlalchemy.orm import sessionmaker
 
@@ -373,8 +441,25 @@ def build_ocr_section_markdown(*, console: object | None = None, use_spinner: bo
 
                 spin_msg = f"SmartFuelOCR.run_pipeline: {src.name}"
                 ctx = TerminalSpinner(spin_msg) if use_spinner else nullcontext()
-                with ctx:
-                    result = ocr.run_pipeline(str(src))
+                if timeout_sec and hasattr(signal, "SIGALRM"):
+                    class _OcrTimeout(Exception):
+                        pass
+
+                    def _alarm_handler(_signum, _frame):
+                        raise _OcrTimeout(f"OCR timeout after {timeout_sec}s")
+
+                    prev = signal.getsignal(signal.SIGALRM)
+                    signal.signal(signal.SIGALRM, _alarm_handler)
+                    signal.alarm(timeout_sec)
+                    try:
+                        with ctx:
+                            result = ocr.run_pipeline(str(src))
+                    finally:
+                        signal.alarm(0)
+                        signal.signal(signal.SIGALRM, prev)
+                else:
+                    with ctx:
+                        result = ocr.run_pipeline(str(src))
             except Exception as e:
                 lines.append(
                     _exc_block(
@@ -383,9 +468,19 @@ def build_ocr_section_markdown(*, console: object | None = None, use_spinner: bo
                         e,
                     )
                 )
+                if fail_fast:
+                    lines.append(
+                        "> OCR-секция остановлена из-за `PROTOTIPE_OCR_FAIL_FAST` после первой критической ошибки.\n"
+                    )
+                    break
                 continue
 
-            lines.append(_format_pipeline_result_md(result))
+            lines.append(_format_pipeline_result_md(result, src=src))
+            if result is None and fail_fast:
+                lines.append(
+                    "> OCR-секция остановлена из-за `PROTOTIPE_OCR_FAIL_FAST` после первого `run_pipeline -> None`.\n"
+                )
+                break
     finally:
         session.close()
         engine.dispose()

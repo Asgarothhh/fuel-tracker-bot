@@ -94,15 +94,19 @@ footer.page-meta { margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid 
   <div class="diagram-wrap">
     <div class="mermaid mermaid-render">%% prototiping.reporting.diagram
 flowchart LR
-  N0["belorusneft_parse / OK / 1.76ms"]:::okNode
-  N1["plates_import / OK / 55.7ms"]:::okNode
-  N2["auth_permissions / OK / 24.16ms"]:::okNode
-  N3["excel_ocr / OK / 7.71ms"]:::okNode
+  N0["belorusneft_parse / OK / 2.19ms"]:::okNode
+  N1["plates_import / OK / 47.04ms"]:::okNode
+  N2["auth_permissions / OK / 19.3ms"]:::okNode
+  N3["excel_ocr / OK / 10.79ms"]:::okNode
+  N4["web_backend / OK / 93.39ms"]:::okNode
+  N5["breaker_probes / OK / 1164.49ms"]:::okNode
   classDef okNode fill:#1a472a,stroke:#234,color:#e8ffe8
   classDef failNode fill:#6b1c1c,stroke:#422,color:#ffe8e8
   N0 --> N1
   N1 --> N2
   N2 --> N3
+  N3 --> N4
+  N4 --> N5
 </div>
   </div>
 
@@ -110,72 +114,160 @@ flowchart LR
 <h2>Подробно по узлам и проверкам</h2>
 <p class="nav-top"><a href="#mermaid-block">↑ Диаграмма</a> · <a href="#top">↑ Наверх</a></p>
 <div class="nodes">
-<article class="node-card ok" id="node-belorusneft_parse"><h3><span class="badge ok">успех узла</span> Узел 1: <code>belorusneft_parse</code></h3><p class="node-meta">Парсинг API / даты (Belorusneft) · <strong>1.76 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<article class="node-card ok" id="node-belorusneft_parse"><h3><span class="badge ok">успех узла</span> Узел 1: <code>belorusneft_parse</code></h3><p class="node-meta">Парсинг API / даты (Belorusneft) · <strong>2.19 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Класс</th><th scope='col'>Факт</th><th scope='col'>Тип</th><th scope='col'>Версия</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
-<td>1</td><td>S01</td><td><code>check_parse_operations_items</code></td><td>Парсинг ответа API: ветка items/data</td>
+<td>1</td><td>S01</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_parse_operations_items</code></td><td>Парсинг ответа API: ветка items/data</td>
 <td class="code" title="`src/app/belorusneft_api.py` → `parse_operations()`">`src/app/belorusneft_api.py` → `parse_operations()`</td><td class="desc" title="Проверка разбора JSON с массивом `items`: дата, продукт, чек, карта, госномер.">Проверка разбора JSON с массивом `items`: дата, продукт, чек, карта, госномер.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">items branch OK</td>
 </tr>
 <tr class="row-ok">
-<td>2</td><td>S02</td><td><code>check_parse_operations_cardlist</code></td><td>Парсинг ответа API: cardList / issueRows</td>
+<td>2</td><td>S02</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_parse_operations_cardlist</code></td><td>Парсинг ответа API: cardList / issueRows</td>
 <td class="code" title="`src/app/belorusneft_api.py` → `parse_operations()`">`src/app/belorusneft_api.py` → `parse_operations()`</td><td class="desc" title="Текущая структура ответа Белоруснефти: вложенные `issueRows`, номер карты с уровня `cardList`.">Текущая структура ответа Белоруснефти: вложенные `issueRows`, номер карты с уровня `cardList`.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">cardList/issueRows OK</td>
 </tr>
 <tr class="row-ok">
-<td>3</td><td>S03</td><td><code>check_parse_api_datetime</code></td><td>Разбор даты/времени из строки API</td>
+<td>3</td><td>S03</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_parse_api_datetime</code></td><td>Разбор даты/времени из строки API</td>
 <td class="code" title="`src/app/import_logic.py` → `parse_api_datetime()`">`src/app/import_logic.py` → `parse_api_datetime()`</td><td class="desc" title="ISO-строка с суффиксом `Z` корректно превращается в `datetime` с timezone.">ISO-строка с суффиксом `Z` корректно превращается в `datetime` с timezone.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">2020-01-15 10:20:30+00:00</td>
 </tr>
 <tr class="row-ok">
-<td>4</td><td>S04</td><td><code>check_api_local_yesterday</code></td><td>Календарное «вчера» в зоне UTC+3</td>
-<td class="code" title="`src/app/import_logic.py` → `api_local_yesterday_datetime()`">`src/app/import_logic.py` → `api_local_yesterday_datetime()`</td><td class="desc" title="Дата для запросов к API в локальной зоне контракта (смещение +3 ч от UTC).">Дата для запросов к API в локальной зоне контракта (смещение +3 ч от UTC).</td><td><span class="pill pill-ok">OK</span></td><td class="detail">2026-04-04T00:00:00</td>
+<td>4</td><td>S04</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_api_local_yesterday</code></td><td>Календарное «вчера» в зоне UTC+3</td>
+<td class="code" title="`src/app/import_logic.py` → `api_local_yesterday_datetime()`">`src/app/import_logic.py` → `api_local_yesterday_datetime()`</td><td class="desc" title="Дата для запросов к API в локальной зоне контракта (смещение +3 ч от UTC).">Дата для запросов к API в локальной зоне контракта (смещение +3 ч от UTC).</td><td><span class="pill pill-ok">OK</span></td><td class="detail">2026-04-07T00:00:00</td>
 </tr>
 <tr class="row-ok">
-<td>5</td><td>S05</td><td><code>check_parse_operations_empty_items_fallback_cardlist</code></td><td>Пустой `items` и при этом рабочий `cardList`</td>
+<td>5</td><td>S05</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_parse_operations_empty_items_fallback_cardlist</code></td><td>Пустой `items` и при этом рабочий `cardList`</td>
 <td class="code" title="`src/app/belorusneft_api.py` → `parse_operations()`">`src/app/belorusneft_api.py` → `parse_operations()`</td><td class="desc" title="Выражение `items or data` даёт «пусто»; парсер должен перейти к `cardList`. Иначе реальный ответ API с пустым массивом и данными в картах молча теряется.">Выражение `items or data` даёт «пусто»; парсер должен перейти к `cardList`. Иначе реальный ответ API с пустым массивом и данными в картах молча теряется.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">cardList used</td>
 </tr>
 <tr class="row-ok">
-<td>6</td><td>S06</td><td><code>check_parse_api_datetime_invalid_inputs</code></td><td>Некорректные входы `parse_api_datetime`</td>
+<td>6</td><td>S06</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_parse_api_datetime_invalid_inputs</code></td><td>Некорректные входы `parse_api_datetime`</td>
 <td class="code" title="`src/app/import_logic.py` → `parse_api_datetime()`">`src/app/import_logic.py` → `parse_api_datetime()`</td><td class="desc" title="Пустые строки, не-даты, числа, нестроковые объекты — только `None`, без исключений; иначе один битый атрибут в JSON валит весь импорт.">Пустые строки, не-даты, числа, нестроковые объекты — только `None`, без исключений; иначе один битый атрибут в JSON валит весь импорт.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">garbage → None, no exception</td>
 </tr>
 </tbody></table></div></article>
-<article class="node-card ok" id="node-plates_import"><h3><span class="badge ok">успех узла</span> Узел 2: <code>plates_import</code></h3><p class="node-meta">Номера, импорт API, дедупликация · <strong>55.7 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<article class="node-card ok" id="node-plates_import"><h3><span class="badge ok">успех узла</span> Узел 2: <code>plates_import</code></h3><p class="node-meta">Номера, импорт API, дедупликация · <strong>47.04 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Класс</th><th scope='col'>Факт</th><th scope='col'>Тип</th><th scope='col'>Версия</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
-<td>7</td><td>S07</td><td><code>check_normalize_plate</code></td><td>Нормализация госномеров</td>
+<td>7</td><td>S07</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_normalize_plate</code></td><td>Нормализация госномеров</td>
 <td class="code" title="`src/app/plate_util.py` → `normalize_plate()`, `plates_equal()`">`src/app/plate_util.py` → `normalize_plate()`, `plates_equal()`</td><td class="desc" title="Удаление пробелов и дефисов, сравнение номеров без учёта форматирования.">Удаление пробелов и дефисов, сравнение номеров без учёта форматирования.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">normalize + plates_equal OK</td>
 </tr>
 <tr class="row-ok">
-<td>8</td><td>S08</td><td><code>check_extract_flat_and_duplicate</code></td><td>Плоские поля и дедупликация импорта API</td>
+<td>8</td><td>S08</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_extract_flat_and_duplicate</code></td><td>Плоские поля и дедупликация импорта API</td>
 <td class="code" title="`src/app/import_logic.py` → `extract_flat_fields()`, `is_duplicate_api_operation()`">`src/app/import_logic.py` → `extract_flat_fields()`, `is_duplicate_api_operation()`</td><td class="desc" title="Извлечение карты/АЗС/продукт/кол-ва и обнаружение уже сохранённой операции с тем же составным ключом.">Извлечение карты/АЗС/продукт/кол-ва и обнаружение уже сохранённой операции с тем же составным ключом.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">dedup key OK</td>
 </tr>
 <tr class="row-ok">
-<td>9</td><td>S09</td><td><code>check_extract_flat_fields_malformed_raw</code></td><td>`raw.row` не объект (список/мусор)</td>
+<td>9</td><td>S09</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_extract_flat_fields_malformed_raw</code></td><td>`raw.row` не объект (список/мусор)</td>
 <td class="code" title="`src/app/import_logic.py` → `extract_flat_fields()`">`src/app/import_logic.py` → `extract_flat_fields()`</td><td class="desc" title="Если `issueRows` когда-то придёт не тем типом в `raw`, доступ к полям через `row` не должен падать: верхний уровень операции остаётся источником правды.">Если `issueRows` когда-то придёт не тем типом в `raw`, доступ к полям через `row` не должен падать: верхний уровень операции остаётся источником правды.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">list row ignored</td>
 </tr>
 <tr class="row-ok">
-<td>10</td><td>S10</td><td><code>check_import_api_operations_dry_run</code></td><td>Импорт операций из JSON (dry_run)</td>
+<td>10</td><td>S10</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_import_api_operations_dry_run</code></td><td>Импорт операций из JSON (dry_run)</td>
 <td class="code" title="`src/app/import_logic.py` → `import_api_operations(..., dry_run=True)`">`src/app/import_logic.py` → `import_api_operations(..., dry_run=True)`</td><td class="desc" title="Создание операции, привязка пользователя по карте, список уведомлений в Telegram без commit в БД.">Создание операции, привязка пользователя по карте, список уведомлений в Telegram без commit в БД.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">1 op, telegram notify</td>
 </tr>
 <tr class="row-ok">
-<td>11</td><td>S11</td><td><code>check_import_skips_without_date_and_doc</code></td><td>Пропуск строки без даты и без чека</td>
+<td>11</td><td>S11</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_import_skips_without_date_and_doc</code></td><td>Пропуск строки без даты и без чека</td>
 <td class="code" title="`src/app/import_logic.py` → `import_api_operations()`">`src/app/import_logic.py` → `import_api_operations()`</td><td class="desc" title="Строка только с продуктом/АЗС без `dateTimeIssue` и `docNumber` должна пропускаться; следующая валидная строка в том же `issueRows` всё равно импортируется (`new_count` не обнуляется целиком).">Строка только с продуктом/АЗС без `dateTimeIssue` и `docNumber` должна пропускаться; следующая валидная строка в том же `issueRows` всё равно импортируется (`new_count` не обнуляется целиком).</td><td><span class="pill pill-ok">OK</span></td><td class="detail">1 row skipped, 1 imported</td>
 </tr>
 </tbody></table></div></article>
-<article class="node-card ok" id="node-auth_permissions"><h3><span class="badge ok">успех узла</span> Узел 3: <code>auth_permissions</code></h3><p class="node-meta">Права и токены привязки · <strong>24.16 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<article class="node-card ok" id="node-auth_permissions"><h3><span class="badge ok">успех узла</span> Узел 3: <code>auth_permissions</code></h3><p class="node-meta">Права и токены привязки · <strong>19.3 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Класс</th><th scope='col'>Факт</th><th scope='col'>Тип</th><th scope='col'>Версия</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
-<td>12</td><td>S12</td><td><code>check_user_has_permission</code></td><td>Проверка прав по роли</td>
+<td>12</td><td>S12</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_user_has_permission</code></td><td>Проверка прав по роли</td>
 <td class="code" title="`src/app/permissions.py` → `user_has_permission()`">`src/app/permissions.py` → `user_has_permission()`</td><td class="desc" title="Администратор с ролью и permission `admin:manage`; отказ для несуществующего права и неизвестного пользователя.">Администратор с ролью и permission `admin:manage`; отказ для несуществующего права и неизвестного пользователя.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">admin OK, unknown denied</td>
 </tr>
 <tr class="row-ok">
-<td>13</td><td>S13</td><td><code>check_tokens_flow</code></td><td>Коды привязки Telegram</td>
+<td>13</td><td>S13</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_tokens_flow</code></td><td>Коды привязки Telegram</td>
 <td class="code" title="`src/app/tokens.py` → `create_bulk_codes()`, `verify_and_consume_code()`">`src/app/tokens.py` → `create_bulk_codes()`, `verify_and_consume_code()`</td><td class="desc" title="Выпуск кода, проверка хэша, пометка токена использованным, запись `telegram_id` у пользователя.">Выпуск кода, проверка хэша, пометка токена использованным, запись `telegram_id` у пользователя.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">bulk + verify + bind OK</td>
 </tr>
 </tbody></table></div></article>
-<article class="node-card ok" id="node-excel_ocr"><h3><span class="badge ok">успех узла</span> Узел 4: <code>excel_ocr</code></h3><p class="node-meta">Схема чека и строка Excel · <strong>7.71 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<article class="node-card ok" id="node-excel_ocr"><h3><span class="badge ok">успех узла</span> Узел 4: <code>excel_ocr</code></h3><p class="node-meta">Схема чека и строка Excel · <strong>10.79 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Класс</th><th scope='col'>Факт</th><th scope='col'>Тип</th><th scope='col'>Версия</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
 <tr class="row-ok">
-<td>14</td><td>S14</td><td><code>check_receipt_schema</code></td><td>Схема данных чека (OCR)</td>
+<td>14</td><td>S14</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_receipt_schema</code></td><td>Схема данных чека (OCR)</td>
 <td class="code" title="`src/ocr/schemas.py` → модель `ReceiptData`">`src/ocr/schemas.py` → модель `ReceiptData`</td><td class="desc" title="Валидация и сериализация типичного набора полей после распознавания чека.">Валидация и сериализация типичного набора полей после распознавания чека.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">schema OK</td>
 </tr>
 <tr class="row-ok">
-<td>15</td><td>S15</td><td><code>check_excel_operation_row</code></td><td>Строка отчёта для Excel</td>
+<td>15</td><td>S15</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_excel_operation_row</code></td><td>Строка отчёта для Excel</td>
 <td class="code" title="`src/app/excel_export.py` → `_operation_row()`">`src/app/excel_export.py` → `_operation_row()`</td><td class="desc" title="Сборка строки по ширине `HEADERS`, подстановка пользователя и типа заправки для операции из API.">Сборка строки по ширине `HEADERS`, подстановка пользователя и типа заправки для операции из API.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">row built</td>
+</tr>
+</tbody></table></div></article>
+<article class="node-card ok" id="node-web_backend"><h3><span class="badge ok">успех узла</span> Узел 5: <code>web_backend</code></h3><p class="node-meta">Web backend: роутеры и сервисы · <strong>93.39 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Класс</th><th scope='col'>Факт</th><th scope='col'>Тип</th><th scope='col'>Версия</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<tr class="row-ok">
+<td>16</td><td>S22</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_health_check</code></td><td>Web health endpoint</td>
+<td class="code" title="`web/backend/main.py` → `health_check()`">`web/backend/main.py` → `health_check()`</td><td class="desc" title="Позитив: endpoint здоровья возвращает `{&quot;status&quot;: &quot;ok&quot;}`.">Позитив: endpoint здоровья возвращает `{&quot;status&quot;: &quot;ok&quot;}`.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">status ok</td>
+</tr>
+<tr class="row-ok">
+<td>17</td><td>S23</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_get_db_yields_session</code></td><td>Web dependency get_db</td>
+<td class="code" title="`web/backend/dependencies.py` → `get_db()`">`web/backend/dependencies.py` → `get_db()`</td><td class="desc" title="Позитив: dependency выдаёт рабочую DB-сессию.">Позитив: dependency выдаёт рабочую DB-сессию.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">session yielded</td>
+</tr>
+<tr class="row-ok">
+<td>18</td><td>S24</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_get_users_endpoint</code></td><td>Web users list endpoint</td>
+<td class="code" title="`web/backend/routers/users.py` → `get_users()`">`web/backend/routers/users.py` → `get_users()`</td><td class="desc" title="Позитив: endpoint возвращает список пользователей из БД.">Позитив: endpoint возвращает список пользователей из БД.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">2 users</td>
+</tr>
+<tr class="row-ok">
+<td>19</td><td>S25</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_get_all_users_role_fallback</code></td><td>Web users role fallback</td>
+<td class="code" title="`web/backend/routers/users.py` → `get_all_users()`">`web/backend/routers/users.py` → `get_all_users()`</td><td class="desc" title="Позитив: при отсутствии роли подставляется fallback `Водитель`.">Позитив: при отсутствии роли подставляется fallback `Водитель`.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">fallback role OK</td>
+</tr>
+<tr class="row-ok">
+<td>20</td><td>S26</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_edit_user_updates_fields</code></td><td>Web edit user</td>
+<td class="code" title="`web/backend/routers/users.py` → `edit_user()`">`web/backend/routers/users.py` → `edit_user()`</td><td class="desc" title="Позитив: обновляются ФИО, активность и role_id пользователя.">Позитив: обновляются ФИО, активность и role_id пользователя.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">user updated</td>
+</tr>
+<tr class="row-ok">
+<td>21</td><td>S27</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_delete_user_success</code></td><td>Web delete user</td>
+<td class="code" title="`web/backend/routers/users.py` → `delete_user()`">`web/backend/routers/users.py` → `delete_user()`</td><td class="desc" title="Позитив: пользователь удаляется, endpoint возвращает `success`.">Позитив: пользователь удаляется, endpoint возвращает `success`.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">deleted</td>
+</tr>
+<tr class="row-ok">
+<td>22</td><td>S28</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_format_operation_api_fields</code></td><td>Web format_operation mapping</td>
+<td class="code" title="`web/backend/routers/operations.py` → `format_operation()`">`web/backend/routers/operations.py` → `format_operation()`</td><td class="desc" title="Позитив: корректно маппятся сумма, тип топлива и пользователь.">Позитив: корректно маппятся сумма, тип топлива и пользователь.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">formatted</td>
+</tr>
+<tr class="row-ok">
+<td>23</td><td>S29</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_get_operations_pending_filter</code></td><td>Web operations pending filter</td>
+<td class="code" title="`web/backend/routers/operations.py` → `get_operations()`">`web/backend/routers/operations.py` → `get_operations()`</td><td class="desc" title="Позитив: вкладка `pending` возвращает только `pending/new`.">Позитив: вкладка `pending` возвращает только `pending/new`.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">pending/new filtered</td>
+</tr>
+<tr class="row-ok">
+<td>24</td><td>S30</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_confirm_reject_reassign_flow</code></td><td>Web operation actions flow</td>
+<td class="code" title="`web/backend/routers/operations.py` → `confirm/reject/reassign`">`web/backend/routers/operations.py` → `confirm/reject/reassign`</td><td class="desc" title="Позитив: действия меняют статус операции согласно бизнес-логике.">Позитив: действия меняют статус операции согласно бизнес-логике.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">confirm/reject/reassign</td>
+</tr>
+<tr class="row-ok">
+<td>25</td><td>S31</td><td>P</td><td>+</td><td>standard</td><td>2</td><td><code>check_web_excel_builder_has_sheets</code></td><td>Web excel report builder</td>
+<td class="code" title="`web/backend/services/excel_report.py` → `build_full_fuel_report_excel()`">`web/backend/services/excel_report.py` → `build_full_fuel_report_excel()`</td><td class="desc" title="Позитив: при наличии операций формируется Excel-буфер.">Позитив: при наличии операций формируется Excel-буфер.</td><td><span class="pill pill-ok">OK</span></td><td class="detail">excel built</td>
+</tr>
+<tr class="row-fail">
+<td>26</td><td>S32</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_web_unknown_tab_404</code></td><td>Breaker web: unknown tab</td>
+<td class="code" title="`web/backend/routers/operations.py` → `get_operations()`">`web/backend/routers/operations.py` → `get_operations()`</td><td class="desc" title="Негатив: неизвестная вкладка должна давать HTTP 404.">Негатив: неизвестная вкладка должна давать HTTP 404.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">404 guard works</td>
+</tr>
+<tr class="row-fail">
+<td>27</td><td>S33</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_web_edit_user_not_found_404</code></td><td>Breaker web: edit missing user</td>
+<td class="code" title="`web/backend/routers/users.py` → `edit_user()`">`web/backend/routers/users.py` → `edit_user()`</td><td class="desc" title="Негатив: редактирование отсутствующего пользователя должно давать HTTP 404.">Негатив: редактирование отсутствующего пользователя должно давать HTTP 404.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">404 guard works</td>
+</tr>
+<tr class="row-fail">
+<td>28</td><td>S34</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_web_delete_op_not_found_404</code></td><td>Breaker web: delete missing operation</td>
+<td class="code" title="`web/backend/routers/operations.py` → `delete_operation()`">`web/backend/routers/operations.py` → `delete_operation()`</td><td class="desc" title="Негатив: удаление отсутствующей операции должно давать HTTP 404.">Негатив: удаление отсутствующей операции должно давать HTTP 404.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">404 guard works</td>
+</tr>
+<tr class="row-fail">
+<td>29</td><td>S35</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_web_reassign_not_found_404</code></td><td>Breaker web: reassign missing operation</td>
+<td class="code" title="`web/backend/routers/operations.py` → `reassign_operation()`">`web/backend/routers/operations.py` → `reassign_operation()`</td><td class="desc" title="Негатив: переназначение отсутствующей операции должно давать HTTP 404.">Негатив: переназначение отсутствующей операции должно давать HTTP 404.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">404 guard works</td>
+</tr>
+<tr class="row-fail">
+<td>30</td><td>S36</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_web_excel_empty_404</code></td><td>Breaker web: excel on empty DB</td>
+<td class="code" title="`web/backend/routers/reports.py` → `download_full_excel_report()`">`web/backend/routers/reports.py` → `download_full_excel_report()`</td><td class="desc" title="Негатив: выгрузка Excel на пустой БД должна давать HTTP 404.">Негатив: выгрузка Excel на пустой БД должна давать HTTP 404.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">404 guard works</td>
+</tr>
+</tbody></table></div></article>
+<article class="node-card ok" id="node-breaker_probes"><h3><span class="badge ok">успех узла</span> Узел 6: <code>breaker_probes</code></h3><p class="node-meta">Негативные (ломающие) сценарии · <strong>1164.49 ms</strong></p><div class="table-scroll"><table class="checks"><thead><tr><th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Класс</th><th scope='col'>Факт</th><th scope='col'>Тип</th><th scope='col'>Версия</th><th scope='col'>Функция</th><th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th><th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th></tr></thead><tbody>
+<tr class="row-fail">
+<td>31</td><td>S16</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_permissions_module_import_cycle_probe</code></td><td>Breaker: цикл импорта permissions/bot</td>
+<td class="code" title="`src/app/permissions.py` (probe import)">`src/app/permissions.py` (probe import)</td><td class="desc" title="Негативный сценарий: пытается воспроизвести цикл импорта в новом src; нужен, чтобы в отчёте явно видеть защищённость прототипирования от этой поломки.">Негативный сценарий: пытается воспроизвести цикл импорта в новом src; нужен, чтобы в отчёте явно видеть защищённость прототипирования от этой поломки.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">cycle/import issue: ImportError(&quot;cannot import name &#x27;ActiveUserMiddleware&#x27; from partially initialized module &#x27;src.app.permissions&#x27; (most likely due to a circular import) (/home/eq/techlb/fuel-tracker-bot/src/app/permissions.py)&quot;)</td>
+</tr>
+<tr class="row-fail">
+<td>32</td><td>S17</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_parse_operations_type_poison</code></td><td>Breaker: обход дедупа через формат АЗС</td>
+<td class="code" title="`src/app/import_logic.py` → `import_api_operations()`, `is_duplicate_api_operation()`">`src/app/import_logic.py` → `import_api_operations()`, `is_duplicate_api_operation()`</td><td class="desc" title="Семантический негатив: одинаковые операции отличаются только форматом номера АЗС (`7` vs `07`); проверяем устойчивость дедупа.">Семантический негатив: одинаковые операции отличаются только форматом номера АЗС (`7` vs `07`); проверяем устойчивость дедупа.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">dedup bypassed, new_count=2</td>
+</tr>
+<tr class="row-fail">
+<td>33</td><td>S18</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_parse_operations_card_rows_type_poison</code></td><td>Breaker: обход дедупа через регистр doc_number</td>
+<td class="code" title="`src/app/import_logic.py` → `import_api_operations()`, `is_duplicate_api_operation()`">`src/app/import_logic.py` → `import_api_operations()`, `is_duplicate_api_operation()`</td><td class="desc" title="Семантический негатив: одинаковые операции отличаются только регистром `doc_number`; проверяем, воспринимается ли это как дубликат.">Семантический негатив: одинаковые операции отличаются только регистром `doc_number`; проверяем, воспринимается ли это как дубликат.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">dedup bypassed, new_count=2</td>
+</tr>
+<tr class="row-fail">
+<td>34</td><td>S19</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_import_quantity_format_dedup_gap</code></td><td>Breaker: обход дедупа через формат количества</td>
+<td class="code" title="`src/app/import_logic.py` → `import_api_operations()`, `is_duplicate_api_operation()`">`src/app/import_logic.py` → `import_api_operations()`, `is_duplicate_api_operation()`</td><td class="desc" title="Семантический негатив: одинаковая операция с `quantity=5` и `quantity=5.0`; если создаются две записи, дедуп уязвим к форматному дрейфу.">Семантический негатив: одинаковая операция с `quantity=5` и `quantity=5.0`; если создаются две записи, дедуп уязвим к форматному дрейфу.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">dedup bypassed, new_count=2</td>
+</tr>
+<tr class="row-fail">
+<td>35</td><td>S20</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_import_invalid_cardlist_shape</code></td><td>Breaker: маппинг пользователя по неактивной карте</td>
+<td class="code" title="`src/app/import_logic.py` → `import_api_operations()`">`src/app/import_logic.py` → `import_api_operations()`</td><td class="desc" title="Семантический негатив: операция по неактивной карте не должна автоматически маппиться на пользователя.">Семантический негатив: операция по неактивной карте не должна автоматически маппиться на пользователя.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">inactive card linked user, notify_users=1</td>
+</tr>
+<tr class="row-fail">
+<td>36</td><td>S21</td><td>N</td><td>-</td><td>breaker</td><td>2</td><td><code>check_breaker_parse_api_datetime_naive_timezone</code></td><td>Breaker: наивный datetime без timezone</td>
+<td class="code" title="`src/app/import_logic.py` → `parse_api_datetime()`">`src/app/import_logic.py` → `parse_api_datetime()`</td><td class="desc" title="Семантический негатив: принимается дата без timezone; это риск рассинхронизации интервалов и дедупа.">Семантический негатив: принимается дата без timezone; это риск рассинхронизации интервалов и дедупа.</td><td><span class="pill pill-fail">FAIL</span></td><td class="detail">naive datetime accepted: datetime.datetime(2026, 4, 1, 10, 0)</td>
 </tr>
 </tbody></table></div></article>
 </div></section>
@@ -184,19 +276,23 @@ flowchart LR
   <p class="nav-top"><a href="#mermaid-block">↑ Диаграмма</a> · <a href="#top">↑ Наверх</a></p>
   <pre class="raw" tabindex="0"><code>%% prototiping.reporting.diagram
 flowchart LR
-  N0[&quot;belorusneft_parse / OK / 1.76ms&quot;]:::okNode
-  N1[&quot;plates_import / OK / 55.7ms&quot;]:::okNode
-  N2[&quot;auth_permissions / OK / 24.16ms&quot;]:::okNode
-  N3[&quot;excel_ocr / OK / 7.71ms&quot;]:::okNode
+  N0[&quot;belorusneft_parse / OK / 2.19ms&quot;]:::okNode
+  N1[&quot;plates_import / OK / 47.04ms&quot;]:::okNode
+  N2[&quot;auth_permissions / OK / 19.3ms&quot;]:::okNode
+  N3[&quot;excel_ocr / OK / 10.79ms&quot;]:::okNode
+  N4[&quot;web_backend / OK / 93.39ms&quot;]:::okNode
+  N5[&quot;breaker_probes / OK / 1164.49ms&quot;]:::okNode
   classDef okNode fill:#1a472a,stroke:#234,color:#e8ffe8
   classDef failNode fill:#6b1c1c,stroke:#422,color:#ffe8e8
   N0 --&gt; N1
   N1 --&gt; N2
   N2 --&gt; N3
+  N3 --&gt; N4
+  N4 --&gt; N5
 </code></pre>
 
   <footer class="page-meta">
-    <p>Сгенерировано prototiping: 2026-04-05 17:32 UTC · Mermaid 11 ESM: <code>https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs</code></p>
+    <p>Сгенерировано prototiping: 2026-04-08 18:35 UTC · Mermaid 11 ESM: <code>https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs</code></p>
   </footer>
   <script type="module">
     import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";

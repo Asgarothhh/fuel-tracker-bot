@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from fastapi import HTTPException
+
 from src.app.belorusneft_api import parse_operations
 from src.app.import_logic import (
     ImportBatch,
@@ -15,13 +17,31 @@ from src.app.import_logic import (
     is_duplicate_api_operation,
     parse_api_datetime,
 )
-from src.app.models import FuelCard, FuelOperation, User
-from src.app.permissions import user_has_permission
+from src.app.models import FuelCard, FuelOperation, User, Role, Permission, role_permissions
 from src.app.plate_util import normalize_plate, plates_equal
 from src.app.excel_export import _operation_row, HEADERS
 from src.app.config import TOKEN_SALT
 from src.app.tokens import generate_code, hash_code, verify_and_consume_code, create_bulk_codes
 from src.ocr.schemas import ReceiptData
+from web.backend.dependencies import get_db as web_get_db
+from web.backend.main import health_check
+from web.backend.routers.operations import (
+    confirm_operation as web_confirm_operation,
+    delete_operation as web_delete_operation,
+    format_operation as web_format_operation,
+    get_operations as web_get_operations,
+    reassign_operation as web_reassign_operation,
+    reject_operation as web_reject_operation,
+)
+from web.backend.routers.reports import download_full_excel_report as web_download_full_excel_report
+from web.backend.routers.users import (
+    delete_user as web_delete_user,
+    edit_user as web_edit_user,
+    get_all_users as web_get_all_users,
+    get_users as web_get_users,
+)
+from web.backend.schemas import ReassignRequest, UserEditRequest
+from web.backend.services.excel_report import build_full_fuel_report_excel
 
 from prototiping.db.memory import memory_db_session, seed_admin_permission
 
@@ -45,6 +65,29 @@ def _result(name: str, ok: bool, detail: str = "") -> dict:
         assert d["ok"] is True
     """
     return {"name": name, "ok": ok, "detail": detail}
+
+
+def _user_has_permission_compat(db, telegram_id: int, permission_name: str) -> bool:
+    """Локальная совместимая проверка прав без импорта ``src.app.permissions``.
+
+    Нужна только для прототипирования: модуль ``src.app.permissions`` теперь
+    тянет bot-слой и может образовать цикл импорта при изолированном прогоне
+    checks/reporting.
+    """
+    row = db.query(User.id, User.role_id).filter(User.telegram_id == telegram_id).first()
+    if not row:
+        return False
+    _, role_id = row
+    if not role_id:
+        return False
+    perm = (
+        db.query(Permission.id)
+        .join(role_permissions, role_permissions.c.permission_id == Permission.id)
+        .join(Role, role_permissions.c.role_id == Role.id)
+        .filter(Role.id == role_id, Permission.name == permission_name)
+        .first()
+    )
+    return bool(perm)
 
 
 def check_parse_operations_items() -> dict:
@@ -383,13 +426,397 @@ def check_user_has_permission() -> dict:
     """
     with memory_db_session() as db:
         seed_admin_permission(db)
-        if not user_has_permission(db, 100001, "admin:manage"):
+        if not _user_has_permission_compat(db, 100001, "admin:manage"):
             return _result("user_has_permission(admin)", False, "expected True")
-        if user_has_permission(db, 100001, "nonexistent:perm"):
+        if _user_has_permission_compat(db, 100001, "nonexistent:perm"):
             return _result("user_has_permission(deny)", False, "expected False")
-        if user_has_permission(db, 999999, "admin:manage"):
+        if _user_has_permission_compat(db, 999999, "admin:manage"):
             return _result("user_has_permission(unknown user)", False, "expected False")
     return _result("user_has_permission", True, "admin OK, unknown denied")
+
+
+def check_breaker_permissions_module_import_cycle_probe() -> dict:
+    """S16: негативный сценарий: пробуем прямой импорт ``src.app.permissions``.
+
+    Это "ломающий" тест: если в новом ``src`` есть cycle import, считаем это
+    за сработавший breaker (ok=False, чтобы классифицировать как TN).
+    """
+    try:
+        from src.app.permissions import ActiveUserMiddleware  # noqa: F401
+    except Exception as e:
+        return _result("breaker: permissions import cycle probe", False, f"cycle/import issue: {e!r}")
+    return _result("breaker: permissions import cycle probe", True, "import succeeded, no cycle detected")
+
+
+def check_breaker_parse_operations_type_poison() -> dict:
+    """S17: семантический негатив: дедуп обходит формат АЗС (`7` vs `07`).
+
+    По бизнес-смыслу это одна и та же АЗС; если импортируются 2 операции,
+    значит ключ дедупликации уязвим к форматному дрейфу.
+    """
+    payload = {
+        "cardList": [
+            {
+                "cardNumber": "DEDUP-AZS-CARD",
+                "issueRows": [
+                    {
+                        "dateTimeIssue": "2026-04-01T10:00:00+00:00",
+                        "docNumber": "DOC-AZS-777",
+                        "productName": "ДТ",
+                        "productQuantity": "5",
+                        "azsNumber": "7",
+                    },
+                    {
+                        "dateTimeIssue": "2026-04-01T10:00:00+00:00",
+                        "docNumber": "DOC-AZS-777",
+                        "productName": "ДТ",
+                        "productQuantity": "5",
+                        "azsNumber": "07",
+                    },
+                ],
+            }
+        ]
+    }
+    with memory_db_session() as db:
+        try:
+            batch: ImportBatch = import_api_operations(db, payload, dry_run=True)
+        except Exception as e:
+            return _result("breaker: dedup azs format gap", False, f"import crashed: {e!r}")
+        db.rollback()
+    if batch.new_count > 1:
+        return _result("breaker: dedup azs format gap", False, f"dedup bypassed, new_count={batch.new_count}")
+    return _result("breaker: dedup azs format gap", True, "dedup resisted azs formatting drift")
+
+
+def check_breaker_parse_operations_card_rows_type_poison() -> dict:
+    """S18: семантический негатив: дедуп обходит регистр в `doc_number`.
+
+    По бизнес-смыслу номер чека обычно регистронезависим.
+    """
+    payload = {
+        "cardList": [
+            {
+                "cardNumber": "DEDUP-DOC-CASE-CARD",
+                "issueRows": [
+                    {
+                        "dateTimeIssue": "2026-04-02T10:00:00+00:00",
+                        "docNumber": "AbC-901",
+                        "productName": "АИ-95",
+                        "productQuantity": "7",
+                        "azsNumber": "A-2",
+                    },
+                    {
+                        "dateTimeIssue": "2026-04-02T10:00:00+00:00",
+                        "docNumber": "abc-901",
+                        "productName": "АИ-95",
+                        "productQuantity": "7",
+                        "azsNumber": "A-2",
+                    },
+                ],
+            }
+        ]
+    }
+    with memory_db_session() as db:
+        try:
+            batch: ImportBatch = import_api_operations(db, payload, dry_run=True)
+        except Exception as e:
+            return _result("breaker: dedup doc case gap", False, f"import crashed: {e!r}")
+        db.rollback()
+    if batch.new_count > 1:
+        return _result("breaker: dedup doc case gap", False, f"dedup bypassed, new_count={batch.new_count}")
+    return _result("breaker: dedup doc case gap", True, "dedup resisted doc case drift")
+
+
+def check_breaker_import_quantity_format_dedup_gap() -> dict:
+    """S19: негативный сценарий: дедуп по количеству `5` vs `5.0`.
+
+    Семантически это одна и та же операция. Если импорт создаёт 2 записи, значит
+    дедуп-ключ слишком строгий по строковому формату.
+    """
+    payload = {
+        "cardList": [
+            {
+                "cardNumber": "DEDUP-QTY-CARD",
+                "issueRows": [
+                    {
+                        "dateTimeIssue": "2026-04-01T10:00:00+00:00",
+                        "docNumber": "DUP-QTY-1",
+                        "productName": "ДТ",
+                        "productQuantity": "5",
+                        "azsNumber": "A-1",
+                    },
+                    {
+                        "dateTimeIssue": "2026-04-01T10:00:00+00:00",
+                        "docNumber": "DUP-QTY-1",
+                        "productName": "ДТ",
+                        "productQuantity": "5.0",
+                        "azsNumber": "A-1",
+                    },
+                ],
+            }
+        ]
+    }
+    with memory_db_session() as db:
+        try:
+            batch: ImportBatch = import_api_operations(db, payload, dry_run=True)
+        except Exception as e:
+            return _result("breaker: dedup qty format gap", False, f"import crashed: {e!r}")
+        db.rollback()
+    if batch.new_count > 1:
+        return _result("breaker: dedup qty format gap", False, f"dedup bypassed, new_count={batch.new_count}")
+    return _result("breaker: dedup qty format gap", True, "dedup resisted qty formatting drift")
+
+
+def check_breaker_import_invalid_cardlist_shape() -> dict:
+    """S20: семантический негатив: неактивная карта не должна мапиться на пользователя."""
+    payload = {
+        "cardList": [
+            {
+                "cardNumber": "INACTIVE-CARD-1",
+                "issueRows": [
+                    {
+                        "dateTimeIssue": "2026-04-03T10:00:00+00:00",
+                        "docNumber": "INACTIVE-CARD-DOC-1",
+                        "productName": "АИ-92",
+                        "productQuantity": "9",
+                        "azsNumber": "A-3",
+                    }
+                ],
+            }
+        ]
+    }
+    with memory_db_session() as db:
+        u = User(
+            full_name="Inactive Card User",
+            telegram_id=123123123,
+            active=True,
+            cars=[],
+            cards=["INACTIVE-CARD-1"],
+            extra_ids={},
+        )
+        db.add(u)
+        db.flush()
+        db.add(FuelCard(card_number="INACTIVE-CARD-1", user_id=u.id, active=False))
+        db.flush()
+        try:
+            batch: ImportBatch = import_api_operations(db, payload, dry_run=True)
+        except Exception as e:
+            return _result("breaker: inactive card user-link", False, f"import crashed: {e!r}")
+        linked = len(batch.notify_users)
+        db.rollback()
+    if linked > 0:
+        return _result("breaker: inactive card user-link", False, f"inactive card linked user, notify_users={linked}")
+    return _result("breaker: inactive card user-link", True, "inactive card did not link user")
+
+
+def check_breaker_parse_api_datetime_naive_timezone() -> dict:
+    """S21: негативный сценарий: наивная дата без timezone.
+
+    Семантически API-время должно быть timezone-aware. Наивный datetime опасен для
+    дедупа и сопоставления интервалов.
+    """
+    dt = parse_api_datetime("2026-04-01 10:00:00")
+    if dt is not None and dt.tzinfo is None:
+        return _result("breaker: parse_api_datetime naive tz", False, f"naive datetime accepted: {dt!r}")
+    return _result("breaker: parse_api_datetime naive tz", True, "naive datetime rejected or normalized")
+
+
+def check_web_health_check() -> dict:
+    r = health_check()
+    if r.get("status") != "ok":
+        return _result("web health", False, str(r))
+    return _result("web health", True, "status ok")
+
+
+def check_web_get_db_yields_session() -> dict:
+    gen = web_get_db()
+    try:
+        db = next(gen)
+        if db is None:
+            return _result("web get_db", False, "no session yielded")
+    except Exception as e:
+        return _result("web get_db", False, repr(e))
+    finally:
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+    return _result("web get_db", True, "session yielded")
+
+
+def check_web_get_users_endpoint() -> dict:
+    with memory_db_session() as db:
+        db.add(User(full_name="U1", telegram_id=1, active=True, cars=[], cards=[], extra_ids={}))
+        db.add(User(full_name="U2", telegram_id=2, active=False, cars=[], cards=[], extra_ids={}))
+        db.flush()
+        out = web_get_users(db=db)
+        if len(out) != 2:
+            return _result("web users list", False, f"len={len(out)}")
+    return _result("web users list", True, "2 users")
+
+
+def check_web_get_all_users_role_fallback() -> dict:
+    with memory_db_session() as db:
+        db.add(User(full_name="No Role", telegram_id=5, active=True, cars=[], cards=[], extra_ids={}))
+        db.flush()
+        out = web_get_all_users(db=db)
+        if not out or out[0].get("role") != "Водитель":
+            return _result("web users role fallback", False, str(out))
+    return _result("web users role fallback", True, "fallback role OK")
+
+
+def check_web_edit_user_updates_fields() -> dict:
+    with memory_db_session() as db:
+        role = Role(role_name="dispatcher", description="d")
+        db.add(role)
+        db.flush()
+        u = User(full_name="Before", telegram_id=99, active=True, role_id=None, cars=[], cards=[], extra_ids={})
+        db.add(u)
+        db.flush()
+        out = web_edit_user(
+            user_id=u.id,
+            payload=UserEditRequest(full_name="After", active=False, role_id=role.id),
+            db=db,
+        )
+        if out.full_name != "After" or out.active is not False or out.role_id != role.id:
+            return _result("web edit user", False, f"{out.full_name}/{out.active}/{out.role_id}")
+    return _result("web edit user", True, "user updated")
+
+
+def check_web_delete_user_success() -> dict:
+    with memory_db_session() as db:
+        u = User(full_name="To Delete", telegram_id=77, active=True, cars=[], cards=[], extra_ids={})
+        db.add(u)
+        db.flush()
+        r = web_delete_user(user_id=u.id, db=db)
+        left = db.query(User).filter(User.id == u.id).count()
+        if r.get("status") != "success" or left != 0:
+            return _result("web delete user", False, f"status={r}, left={left}")
+    return _result("web delete user", True, "deleted")
+
+
+def check_web_format_operation_api_fields() -> dict:
+    with memory_db_session() as db:
+        u = User(full_name="Fmt User", telegram_id=301, active=True, cars=[], cards=[], extra_ids={})
+        db.add(u)
+        db.flush()
+        op = FuelOperation(
+            source="api",
+            api_data={"sum": "25.5", "service_name": "АИ-95"},
+            doc_number="FMT-1",
+            date_time=datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc),
+            presumed_user_id=u.id,
+            status="pending",
+            car_from_api="1111AA7",
+        )
+        db.add(op)
+        db.flush()
+        d = web_format_operation(op)
+        if d["amount"] != 25.5 or d["fuel_type"] != "АИ-95" or d["user_name"] != "Fmt User":
+            return _result("web format_operation", False, str(d))
+    return _result("web format_operation", True, "formatted")
+
+
+def check_web_get_operations_pending_filter() -> dict:
+    with memory_db_session() as db:
+        db.add(FuelOperation(source="api", status="pending", date_time=datetime.now(timezone.utc)))
+        db.add(FuelOperation(source="api", status="new", date_time=datetime.now(timezone.utc)))
+        db.add(FuelOperation(source="api", status="confirmed", date_time=datetime.now(timezone.utc)))
+        db.flush()
+        out = web_get_operations("pending", db=db)
+        if len(out) != 2:
+            return _result("web operations pending", False, f"len={len(out)}")
+    return _result("web operations pending", True, "pending/new filtered")
+
+
+def check_web_confirm_reject_reassign_flow() -> dict:
+    with memory_db_session() as db:
+        u = User(full_name="New User", telegram_id=880, active=True, cars=[], cards=[], extra_ids={})
+        op = FuelOperation(source="api", status="new", date_time=datetime.now(timezone.utc))
+        db.add_all([u, op])
+        db.flush()
+        web_confirm_operation(op.id, db=db)
+        web_reject_operation(op.id, db=db)
+        web_reassign_operation(op.id, payload=ReassignRequest(new_user_id=u.id), db=db)
+        db.refresh(op)
+        if op.status != "pending" or op.presumed_user_id != u.id:
+            return _result("web op actions", False, f"status={op.status}, uid={op.presumed_user_id}")
+    return _result("web op actions", True, "confirm/reject/reassign")
+
+
+def check_web_excel_builder_has_sheets() -> dict:
+    with memory_db_session() as db:
+        db.add(FuelOperation(source="api", status="confirmed", date_time=datetime.now(timezone.utc), api_data={}))
+        db.flush()
+        buf, count = build_full_fuel_report_excel(db)
+        if buf is None or count != 1:
+            return _result("web excel builder", False, f"buf={buf is not None}, count={count}")
+    return _result("web excel builder", True, "excel built")
+
+
+def check_breaker_web_unknown_tab_404() -> dict:
+    with memory_db_session() as db:
+        try:
+            web_get_operations("mystery", db=db)
+        except HTTPException as e:
+            if e.status_code == 404:
+                return _result("breaker web unknown tab", False, "404 guard works")
+            return _result("breaker web unknown tab", True, f"unexpected code {e.status_code}")
+        except Exception as e:
+            return _result("breaker web unknown tab", True, repr(e))
+    return _result("breaker web unknown tab", True, "no guard raised")
+
+
+def check_breaker_web_edit_user_not_found_404() -> dict:
+    with memory_db_session() as db:
+        try:
+            web_edit_user(9999, UserEditRequest(full_name="X", active=True, role_id=1), db=db)
+        except HTTPException as e:
+            if e.status_code == 404:
+                return _result("breaker web edit missing", False, "404 guard works")
+            return _result("breaker web edit missing", True, f"unexpected code {e.status_code}")
+        except Exception as e:
+            return _result("breaker web edit missing", True, repr(e))
+    return _result("breaker web edit missing", True, "no guard raised")
+
+
+def check_breaker_web_delete_op_not_found_404() -> dict:
+    with memory_db_session() as db:
+        try:
+            web_delete_operation(7777, db=db)
+        except HTTPException as e:
+            if e.status_code == 404:
+                return _result("breaker web delete op missing", False, "404 guard works")
+            return _result("breaker web delete op missing", True, f"unexpected code {e.status_code}")
+        except Exception as e:
+            return _result("breaker web delete op missing", True, repr(e))
+    return _result("breaker web delete op missing", True, "no guard raised")
+
+
+def check_breaker_web_reassign_not_found_404() -> dict:
+    with memory_db_session() as db:
+        try:
+            web_reassign_operation(8888, ReassignRequest(new_user_id=1), db=db)
+        except HTTPException as e:
+            if e.status_code == 404:
+                return _result("breaker web reassign missing", False, "404 guard works")
+            return _result("breaker web reassign missing", True, f"unexpected code {e.status_code}")
+        except Exception as e:
+            return _result("breaker web reassign missing", True, repr(e))
+    return _result("breaker web reassign missing", True, "no guard raised")
+
+
+def check_breaker_web_excel_empty_404() -> dict:
+    with memory_db_session() as db:
+        try:
+            web_download_full_excel_report(db=db)
+        except HTTPException as e:
+            if e.status_code == 404:
+                return _result("breaker web excel empty", False, "404 guard works")
+            return _result("breaker web excel empty", True, f"unexpected code {e.status_code}")
+        except Exception as e:
+            return _result("breaker web excel empty", True, repr(e))
+    return _result("breaker web excel empty", True, "no guard raised")
 
 
 def check_tokens_flow() -> dict:
@@ -517,4 +944,25 @@ ALL_CHECKS = [
     check_tokens_flow,
     check_receipt_schema,
     check_excel_operation_row,
+    check_breaker_permissions_module_import_cycle_probe,
+    check_breaker_parse_operations_type_poison,
+    check_breaker_parse_operations_card_rows_type_poison,
+    check_breaker_import_quantity_format_dedup_gap,
+    check_breaker_import_invalid_cardlist_shape,
+    check_breaker_parse_api_datetime_naive_timezone,
+    check_web_health_check,
+    check_web_get_db_yields_session,
+    check_web_get_users_endpoint,
+    check_web_get_all_users_role_fallback,
+    check_web_edit_user_updates_fields,
+    check_web_delete_user_success,
+    check_web_format_operation_api_fields,
+    check_web_get_operations_pending_filter,
+    check_web_confirm_reject_reassign_flow,
+    check_web_excel_builder_has_sheets,
+    check_breaker_web_unknown_tab_404,
+    check_breaker_web_edit_user_not_found_404,
+    check_breaker_web_delete_op_not_found_404,
+    check_breaker_web_reassign_not_found_404,
+    check_breaker_web_excel_empty_404,
 ]

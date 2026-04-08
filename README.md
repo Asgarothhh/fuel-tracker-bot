@@ -1,74 +1,124 @@
-# Учёт заправок 
+# Fuel Tracker Bot
 
-# Документация репозитория
+Монорепозиторий системы учёта заправок: Telegram-бот и доменная логика в `src/`, HTTP API и веб-клиент в `web/`, отдельный контур сценарных проверок в `prototiping/`. Одна модель данных и импорт операций обслуживают и бота, и API.
 
-В каталоге `docs/` собраны материалы по **боевому приложению** (`src/`) и по пакету **прототипирования** (`prototiping/`).
+## Возможности
 
-## Приложение: учёт заправок (Telegram-бот)
+- **Telegram-бот** — привязка пользователей, карты, авто, сценарии подтверждения операций, в т.ч. личные чеки с OCR.
+- **Импорт из API Белоруснефть** — периодический и ручной импорт, дедупликация, согласование с существующими записями.
+- **OCR чеков** — Tesseract + LLM-структурирование, дедуп по хэшу и бизнес-ключам; подробности в [docs/OCR/README.md](docs/OCR/README.md).
+- **Excel-отчёты** — выгрузка согласованных данных для отчётности.
+- **Web** — FastAPI backend и React (Vite) frontend для операций, пользователей и отчётов.
+- **Прототипирование** — граф сценариев P/N, метрики TP/FN/TN/FP, `REPORT.md` и превью графа без обязательных правок production-кода.
 
-| Документ | Содержание |
-|----------|------------|
-| [MODULES_SRC/README.md](docs/MODULES_SRC/README.md) | **Документация для разработчиков** по всем модулям `src/` (архитектура, ER, FSM, диаграммы) |
-| [TELEGRAM_BOT.md](docs/TELEGRAM_BOT.md) | Команды, приветствие, структура бота (кратко) |
-| [PERSONAL_FUNDS_SCENARIO.md](docs/PERSONAL_FUNDS_SCENARIO.md) | Сценарий «за личные средства» по шагам ТЗ |
-| [OCR_MODULE.md](docs/OCR_MODULE.md) | Пайплайн OCR, переменные окружения (кратко) |
-| [EXCEL_AND_DATA.md](docs/EXCEL_AND_DATA.md) | Excel, справочники авто и пользователей |
+## Стек
 
-Код клиента **API Белоруснефти** в репозитории не изменялся; интеграция описывается только на уровне архитектуры в исходниках.
+| Область | Технологии |
+|---------|------------|
+| Бот | Python 3, aiogram 3, APScheduler |
+| Данные | SQLAlchemy 2, PostgreSQL (через `DATABASE_URL`) |
+| OCR | OpenCV, pytesseract, Pillow, LangChain/OpenRouter |
+| Web API | FastAPI, Uvicorn |
+| Frontend | React, Vite, Ant Design |
+| Проверки | LangGraph, pytest, in-memory SQLite в `prototiping/` |
 
----
+## Требования
 
-# Документация прототипирования
+- Python 3.11+ (рекомендуется).
+- **PostgreSQL** — строка подключения в `DATABASE_URL`.
+- **Tesseract** и языковые пакеты `rus`/`eng` — для OCR (см. [docs/OCR/TROUBLESHOOTING.md](docs/OCR/TROUBLESHOOTING.md)).
+- Для OCR с LLM — ключ **OpenRouter** (`OPENROUTER_API_KEY`).
 
-Ниже — **как устроен** каталог `prototiping/`, **как запускать** прогоны и отчёты и **как добавлять свои проверки** (сценарии) без путаницы.
-
-Сценарии **не заменяют** код приложения: они импортируют и вызывают уже существующие функции из `src/` (см. [HOW_IT_WORKS.md](HOW_IT_WORKS.md)).
-
-## Оглавление
-
-### Старт и концепция
-
-| Документ | О чём |
-|----------|--------|
-| [QUICKSTART.md](docs/QUICKSTART.md) | Пошагово: написание тестов/сценариев, примеры, диаграммы |
-| [HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) | Зачем пакет, поток до `REPORT.md`, граф LangGraph, артефакты |
-| [STRUCTURE.md](docs/STRUCTURE.md) | Дерево каталогов, роли модулей, диаграммы |
-| [ADDING_SCENARIOS.md](docs/ADDING_SCENARIOS.md) | Краткая схема добавления сценария + ссылка на QUICKSTART |
-| [REPORT_TEMPLATE.md](docs/REPORT_TEMPLATE.md) | Как собирается отчёт из `reporting/template.md`, все `{{…}}`, как править шаблон |
-| [GRAPH_PREVIEW_HTML.md](docs/GRAPH_PREVIEW_HTML.md) | Как собирается `output/graph_preview.html`, Mermaid 11, структура страницы, офлайн |
-
-### Справочник по подпакетам (`docs/MODULES/`)
-
-| Папка / область | Файл |
-|-----------------|------|
-| `prototiping/db/` | [MODULES/DB.md](docs/MODULES/DB.md) |
-| `prototiping/checks/` | [MODULES/CHECKS.md](docs/MODULES/CHECKS.md) |
-| `prototiping/graph/` | [MODULES/GRAPH.md](docs/MODULES/GRAPH.md) |
-| `prototiping/reporting/` | [MODULES/REPORTING.md](docs/MODULES/REPORTING.md) |
-| `prototiping/lib/` | [MODULES/LIB.md](docs/MODULES/LIB.md) |
-| `prototiping/tools/` | [MODULES/TOOLS.md](docs/MODULES/TOOLS.md) |
-| `prototiping/tests/` + `conftest.py`, `__main__.py` | [MODULES/TESTS.md](docs/MODULES/TESTS.md) |
-
-## Быстрый старт (команды)
-
-Из **корня репозитория** (нужен `PYTHONPATH=.`):
+## Установка
 
 ```bash
-PYTHONPATH=. python -m prototiping
-PYTHONPATH=. pytest prototiping -q
-PYTHONPATH=. python -m prototiping.tools.graph_preview
+git clone <repository-url>
+cd fuel-tracker-bot
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+pip install -r web/backend/requirements.txt   # доп. зависимости веб-слоя (openpyxl и др.)
 ```
 
-Первая команда — `REPORT.md` и Rich в консоли; вторая — pytest и перезапись отчёта; третья — HTML-превью графа (подробнее [GRAPH_PREVIEW_HTML.md](docs/GRAPH_PREVIEW_HTML.md)).
+Создайте файл `.env` в корне (или положите переменные в окружение процесса). Минимально для бота и API:
 
-Отчёты и слепки:
+| Переменная | Назначение |
+|------------|------------|
+| `DATABASE_URL` | PostgreSQL, например `postgresql+psycopg2://user:pass@host:5432/dbname` |
+| `BOT_TOKEN` | токен Telegram-бота |
+| `TOKEN_SALT` | соль для кодов привязки |
+| `ADMIN_TELEGRAM_ID` | ID администратора в Telegram |
 
-- `prototiping/REPORT.md` — человекочитаемый отчёт
-- `prototiping/.last_prototype_trace.json` — трассировка последнего прогона
-- `prototiping/output/graph_preview.html` — превью графа в браузере
+Импорт API Белоруснефть и прочие переменные — см. [src/app/config.py](src/app/config.py) и [docs/BOT_SRC/MODULES/SERVICES_AND_CONFIG.md](docs/BOT_SRC/MODULES/SERVICES_AND_CONFIG.md).
 
-## Одна фраза
+Инициализация схемы БД выполняется при старте бота (`init_db` в [src/run_bot.py](src/run_bot.py)); при необходимости используйте Alembic из проекта.
 
-**Прототипирование** — это набор **автоматических проверок** кода приложения (`src/`), согласованных со **спецификацией графа** (`graph/spec.py`), с **отчётом** и **HTML-превью**, без обязательного изменения боевого кода ради тестов.
+## Запуск
 
-Дальше: [Как это работает →](docs/HOW_IT_WORKS.md)
+### Telegram-бот
+
+Из корня репозитория (нужен `PYTHONPATH` для пакета `src`):
+
+```bash
+export PYTHONPATH=.
+python src/run_bot.py
+```
+
+### Backend API (FastAPI)
+
+```bash
+export PYTHONPATH=.
+uvicorn web.backend.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Проверка: `GET http://localhost:8000/api/health` → `{"status":"ok"}`. CORS в [web/backend/main.py](web/backend/main.py) настроен под `localhost:5173` и `localhost:3000`.
+
+### Frontend (Vite)
+
+```bash
+cd web/frontend
+npm install
+npm run dev
+```
+
+### Прототипирование и отчёты
+
+```bash
+export PYTHONPATH=.
+python -m prototiping
+pytest prototiping -q
+python -m prototiping.tools.graph_preview
+```
+
+Артефакты: `prototiping/REPORT.md`, `prototiping/.last_prototype_trace.json`, `prototiping/output/graph_preview.html`.
+
+## Документация
+
+Центральная карта: **[docs/README.md](docs/README.md)**.
+
+| Раздел | Содержание |
+|--------|------------|
+| [docs/BOT_SRC/](docs/BOT_SRC/README.md) | Бот, `src/app`, права, импорт, Excel |
+| [docs/WEB/](docs/WEB/README.md) | API, сервисы, интеграция с frontend |
+| [docs/PROTOTIPING/](docs/PROTOTIPING/README.md) | Сценарии P/N, граф, отчёты |
+| [docs/OCR/](docs/OCR/README.md) | Pipeline OCR, контракты, дедуп, troubleshooting |
+| [docs/STRUCTURE.md](docs/STRUCTURE.md) | Дерево `docs/` и пакета `prototiping/` |
+
+**Имена папок:** в репозитории каталог документации по прототипированию называется `docs/PROTOTIPING/` (рядом с ним Python-пакет `prototiping/` — это разные имена, ссылки везде ведут на актуальные пути).
+
+## Архитектура на одном экране
+
+```mermaid
+flowchart LR
+    TG[Telegram] --> BOT[src/app бот]
+    FE[Web frontend] --> API[FastAPI web/backend]
+    BOT --> DB[(PostgreSQL)]
+    API --> DB
+    BOT --> XLS[Excel export]
+    PT[prototiping] --> BOT
+    PT --> API
+```
+
+## Лицензия
+
+В репозитории файл лицензии не задан; уточните у владельцев проекта перед распространением.

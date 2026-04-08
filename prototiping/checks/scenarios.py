@@ -7,10 +7,13 @@
 """
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 
-class ScenarioMeta(TypedDict):
+SCENARIO_SCHEMA_VERSION = "2"
+
+
+class ScenarioMeta(TypedDict, total=False):
     """Метаданные одного сценария для таблицы и детализации отчёта.
 
     Ключ в ``SCENARIO_META`` — ``__name__`` функции ``check_*`` из ``checks.suite``.
@@ -21,6 +24,8 @@ class ScenarioMeta(TypedDict):
     title: str
     code_under_test: str
     description: str
+    kind: Literal["standard", "breaker"]
+    scenario_version: str
 
 
 SCENARIO_META: dict[str, ScenarioMeta] = {
@@ -30,6 +35,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Парсинг ответа API: ветка items/data",
         "code_under_test": "`src/app/belorusneft_api.py` → `parse_operations()`",
         "description": "Проверка разбора JSON с массивом `items`: дата, продукт, чек, карта, госномер.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_parse_operations_cardlist": {
         "id": "S02",
@@ -37,6 +44,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Парсинг ответа API: cardList / issueRows",
         "code_under_test": "`src/app/belorusneft_api.py` → `parse_operations()`",
         "description": "Текущая структура ответа Белоруснефти: вложенные `issueRows`, номер карты с уровня `cardList`.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_parse_api_datetime": {
         "id": "S03",
@@ -44,6 +53,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Разбор даты/времени из строки API",
         "code_under_test": "`src/app/import_logic.py` → `parse_api_datetime()`",
         "description": "ISO-строка с суффиксом `Z` корректно превращается в `datetime` с timezone.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_api_local_yesterday": {
         "id": "S04",
@@ -51,6 +62,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Календарное «вчера» в зоне UTC+3",
         "code_under_test": "`src/app/import_logic.py` → `api_local_yesterday_datetime()`",
         "description": "Дата для запросов к API в локальной зоне контракта (смещение +3 ч от UTC).",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_parse_operations_empty_items_fallback_cardlist": {
         "id": "S05",
@@ -58,6 +71,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Пустой `items` и при этом рабочий `cardList`",
         "code_under_test": "`src/app/belorusneft_api.py` → `parse_operations()`",
         "description": "Выражение `items or data` даёт «пусто»; парсер должен перейти к `cardList`. Иначе реальный ответ API с пустым массивом и данными в картах молча теряется.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_parse_api_datetime_invalid_inputs": {
         "id": "S06",
@@ -65,6 +80,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Некорректные входы `parse_api_datetime`",
         "code_under_test": "`src/app/import_logic.py` → `parse_api_datetime()`",
         "description": "Пустые строки, не-даты, числа, нестроковые объекты — только `None`, без исключений; иначе один битый атрибут в JSON валит весь импорт.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_normalize_plate": {
         "id": "S07",
@@ -72,6 +89,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Нормализация госномеров",
         "code_under_test": "`src/app/plate_util.py` → `normalize_plate()`, `plates_equal()`",
         "description": "Удаление пробелов и дефисов, сравнение номеров без учёта форматирования.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_extract_flat_and_duplicate": {
         "id": "S08",
@@ -79,6 +98,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Плоские поля и дедупликация импорта API",
         "code_under_test": "`src/app/import_logic.py` → `extract_flat_fields()`, `is_duplicate_api_operation()`",
         "description": "Извлечение карты/АЗС/продукт/кол-ва и обнаружение уже сохранённой операции с тем же составным ключом.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_extract_flat_fields_malformed_raw": {
         "id": "S09",
@@ -86,6 +107,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "`raw.row` не объект (список/мусор)",
         "code_under_test": "`src/app/import_logic.py` → `extract_flat_fields()`",
         "description": "Если `issueRows` когда-то придёт не тем типом в `raw`, доступ к полям через `row` не должен падать: верхний уровень операции остаётся источником правды.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_import_api_operations_dry_run": {
         "id": "S10",
@@ -93,6 +116,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Импорт операций из JSON (dry_run)",
         "code_under_test": "`src/app/import_logic.py` → `import_api_operations(..., dry_run=True)`",
         "description": "Создание операции, привязка пользователя по карте, список уведомлений в Telegram без commit в БД.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_import_skips_without_date_and_doc": {
         "id": "S11",
@@ -100,6 +125,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Пропуск строки без даты и без чека",
         "code_under_test": "`src/app/import_logic.py` → `import_api_operations()`",
         "description": "Строка только с продуктом/АЗС без `dateTimeIssue` и `docNumber` должна пропускаться; следующая валидная строка в том же `issueRows` всё равно импортируется (`new_count` не обнуляется целиком).",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_user_has_permission": {
         "id": "S12",
@@ -107,6 +134,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Проверка прав по роли",
         "code_under_test": "`src/app/permissions.py` → `user_has_permission()`",
         "description": "Администратор с ролью и permission `admin:manage`; отказ для несуществующего права и неизвестного пользователя.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_tokens_flow": {
         "id": "S13",
@@ -114,6 +143,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Коды привязки Telegram",
         "code_under_test": "`src/app/tokens.py` → `create_bulk_codes()`, `verify_and_consume_code()`",
         "description": "Выпуск кода, проверка хэша, пометка токена использованным, запись `telegram_id` у пользователя.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_receipt_schema": {
         "id": "S14",
@@ -121,6 +152,8 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Схема данных чека (OCR)",
         "code_under_test": "`src/ocr/schemas.py` → модель `ReceiptData`",
         "description": "Валидация и сериализация типичного набора полей после распознавания чека.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
     "check_excel_operation_row": {
         "id": "S15",
@@ -128,5 +161,196 @@ SCENARIO_META: dict[str, ScenarioMeta] = {
         "title": "Строка отчёта для Excel",
         "code_under_test": "`src/app/excel_export.py` → `_operation_row()`",
         "description": "Сборка строки по ширине `HEADERS`, подстановка пользователя и типа заправки для операции из API.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_permissions_module_import_cycle_probe": {
+        "id": "S16",
+        "graph_node": "breaker_probes",
+        "title": "Breaker: цикл импорта permissions/bot",
+        "code_under_test": "`src/app/permissions.py` (probe import)",
+        "description": "Негативный сценарий: пытается воспроизвести цикл импорта в новом src; нужен, чтобы в отчёте явно видеть защищённость прототипирования от этой поломки.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_parse_operations_type_poison": {
+        "id": "S17",
+        "graph_node": "breaker_probes",
+        "title": "Breaker: обход дедупа через формат АЗС",
+        "code_under_test": "`src/app/import_logic.py` → `import_api_operations()`, `is_duplicate_api_operation()`",
+        "description": "Семантический негатив: одинаковые операции отличаются только форматом номера АЗС (`7` vs `07`); проверяем устойчивость дедупа.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_parse_operations_card_rows_type_poison": {
+        "id": "S18",
+        "graph_node": "breaker_probes",
+        "title": "Breaker: обход дедупа через регистр doc_number",
+        "code_under_test": "`src/app/import_logic.py` → `import_api_operations()`, `is_duplicate_api_operation()`",
+        "description": "Семантический негатив: одинаковые операции отличаются только регистром `doc_number`; проверяем, воспринимается ли это как дубликат.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_import_quantity_format_dedup_gap": {
+        "id": "S19",
+        "graph_node": "breaker_probes",
+        "title": "Breaker: обход дедупа через формат количества",
+        "code_under_test": "`src/app/import_logic.py` → `import_api_operations()`, `is_duplicate_api_operation()`",
+        "description": "Семантический негатив: одинаковая операция с `quantity=5` и `quantity=5.0`; если создаются две записи, дедуп уязвим к форматному дрейфу.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_import_invalid_cardlist_shape": {
+        "id": "S20",
+        "graph_node": "breaker_probes",
+        "title": "Breaker: маппинг пользователя по неактивной карте",
+        "code_under_test": "`src/app/import_logic.py` → `import_api_operations()`",
+        "description": "Семантический негатив: операция по неактивной карте не должна автоматически маппиться на пользователя.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_parse_api_datetime_naive_timezone": {
+        "id": "S21",
+        "graph_node": "breaker_probes",
+        "title": "Breaker: наивный datetime без timezone",
+        "code_under_test": "`src/app/import_logic.py` → `parse_api_datetime()`",
+        "description": "Семантический негатив: принимается дата без timezone; это риск рассинхронизации интервалов и дедупа.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_health_check": {
+        "id": "S22",
+        "graph_node": "web_backend",
+        "title": "Web health endpoint",
+        "code_under_test": "`web/backend/main.py` → `health_check()`",
+        "description": "Позитив: endpoint здоровья возвращает `{\"status\": \"ok\"}`.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_get_db_yields_session": {
+        "id": "S23",
+        "graph_node": "web_backend",
+        "title": "Web dependency get_db",
+        "code_under_test": "`web/backend/dependencies.py` → `get_db()`",
+        "description": "Позитив: dependency выдаёт рабочую DB-сессию.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_get_users_endpoint": {
+        "id": "S24",
+        "graph_node": "web_backend",
+        "title": "Web users list endpoint",
+        "code_under_test": "`web/backend/routers/users.py` → `get_users()`",
+        "description": "Позитив: endpoint возвращает список пользователей из БД.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_get_all_users_role_fallback": {
+        "id": "S25",
+        "graph_node": "web_backend",
+        "title": "Web users role fallback",
+        "code_under_test": "`web/backend/routers/users.py` → `get_all_users()`",
+        "description": "Позитив: при отсутствии роли подставляется fallback `Водитель`.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_edit_user_updates_fields": {
+        "id": "S26",
+        "graph_node": "web_backend",
+        "title": "Web edit user",
+        "code_under_test": "`web/backend/routers/users.py` → `edit_user()`",
+        "description": "Позитив: обновляются ФИО, активность и role_id пользователя.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_delete_user_success": {
+        "id": "S27",
+        "graph_node": "web_backend",
+        "title": "Web delete user",
+        "code_under_test": "`web/backend/routers/users.py` → `delete_user()`",
+        "description": "Позитив: пользователь удаляется, endpoint возвращает `success`.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_format_operation_api_fields": {
+        "id": "S28",
+        "graph_node": "web_backend",
+        "title": "Web format_operation mapping",
+        "code_under_test": "`web/backend/routers/operations.py` → `format_operation()`",
+        "description": "Позитив: корректно маппятся сумма, тип топлива и пользователь.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_get_operations_pending_filter": {
+        "id": "S29",
+        "graph_node": "web_backend",
+        "title": "Web operations pending filter",
+        "code_under_test": "`web/backend/routers/operations.py` → `get_operations()`",
+        "description": "Позитив: вкладка `pending` возвращает только `pending/new`.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_confirm_reject_reassign_flow": {
+        "id": "S30",
+        "graph_node": "web_backend",
+        "title": "Web operation actions flow",
+        "code_under_test": "`web/backend/routers/operations.py` → `confirm/reject/reassign`",
+        "description": "Позитив: действия меняют статус операции согласно бизнес-логике.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_web_excel_builder_has_sheets": {
+        "id": "S31",
+        "graph_node": "web_backend",
+        "title": "Web excel report builder",
+        "code_under_test": "`web/backend/services/excel_report.py` → `build_full_fuel_report_excel()`",
+        "description": "Позитив: при наличии операций формируется Excel-буфер.",
+        "kind": "standard",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_web_unknown_tab_404": {
+        "id": "S32",
+        "graph_node": "web_backend",
+        "title": "Breaker web: unknown tab",
+        "code_under_test": "`web/backend/routers/operations.py` → `get_operations()`",
+        "description": "Негатив: неизвестная вкладка должна давать HTTP 404.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_web_edit_user_not_found_404": {
+        "id": "S33",
+        "graph_node": "web_backend",
+        "title": "Breaker web: edit missing user",
+        "code_under_test": "`web/backend/routers/users.py` → `edit_user()`",
+        "description": "Негатив: редактирование отсутствующего пользователя должно давать HTTP 404.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_web_delete_op_not_found_404": {
+        "id": "S34",
+        "graph_node": "web_backend",
+        "title": "Breaker web: delete missing operation",
+        "code_under_test": "`web/backend/routers/operations.py` → `delete_operation()`",
+        "description": "Негатив: удаление отсутствующей операции должно давать HTTP 404.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_web_reassign_not_found_404": {
+        "id": "S35",
+        "graph_node": "web_backend",
+        "title": "Breaker web: reassign missing operation",
+        "code_under_test": "`web/backend/routers/operations.py` → `reassign_operation()`",
+        "description": "Негатив: переназначение отсутствующей операции должно давать HTTP 404.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
+    },
+    "check_breaker_web_excel_empty_404": {
+        "id": "S36",
+        "graph_node": "web_backend",
+        "title": "Breaker web: excel on empty DB",
+        "code_under_test": "`web/backend/routers/reports.py` → `download_full_excel_report()`",
+        "description": "Негатив: выгрузка Excel на пустой БД должна давать HTTP 404.",
+        "kind": "breaker",
+        "scenario_version": SCENARIO_SCHEMA_VERSION,
     },
 }

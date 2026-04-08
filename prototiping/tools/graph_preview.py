@@ -123,7 +123,7 @@ def build_scenarios_sections_html(trace: dict) -> str:
             f"Узел {idx}: <code>{nid_e}</code></h3>"
             f'<p class="node-meta">{html.escape(title)} · <strong>{html.escape(str(ms))} ms</strong></p>'
             '<div class="table-scroll"><table class="checks"><thead><tr>'
-            "<th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Функция</th>"
+            "<th scope='col'>№</th><th scope='col'>Код</th><th scope='col'>Класс</th><th scope='col'>Факт</th><th scope='col'>Тип</th><th scope='col'>Версия</th><th scope='col'>Функция</th>"
             "<th scope='col'>Сценарий</th><th scope='col'>Проверяемый код</th>"
             "<th scope='col'>Что проверяется</th><th scope='col'>Результат</th><th scope='col'>Детали</th>"
             "</tr></thead><tbody>"
@@ -133,6 +133,10 @@ def build_scenarios_sections_html(trace: dict) -> str:
             fn = c.get("fn", "")
             meta = SCENARIO_META.get(fn, {})
             sid = html.escape(str(meta.get("id", "—")))
+            cls = "N" if str(meta.get("kind", "standard")) == "breaker" else "P"
+            fact = "-" if not bool(c.get("ok")) else "+"
+            kind = html.escape(str(meta.get("kind", "standard")))
+            ver = html.escape(str(meta.get("scenario_version", "legacy")))
             fn_e = html.escape(fn)
             stitle = html.escape(str(meta.get("title", "—")))
             code_raw = str(meta.get("code_under_test", "—"))
@@ -148,7 +152,7 @@ def build_scenarios_sections_html(trace: dict) -> str:
             det_cell = html.escape(det_raw).replace("\n", "<br/>")
             parts.append(f'<tr class="{row_cls}">')
             parts.append(
-                f"<td>{run_no}</td><td>{sid}</td><td><code>{fn_e}</code></td><td>{stitle}</td>"
+                f"<td>{run_no}</td><td>{sid}</td><td>{cls}</td><td>{fact}</td><td>{kind}</td><td>{ver}</td><td><code>{fn_e}</code></td><td>{stitle}</td>"
             )
             parts.append(
                 f'<td class="code" title="{code_e}">{code_short}</td>'

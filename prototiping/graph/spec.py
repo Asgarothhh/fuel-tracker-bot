@@ -50,6 +50,39 @@ GRAPH_NODES_SPEC: list[dict[str, Any]] = [
             chk.check_excel_operation_row,
         ],
     },
+    {
+        "id": "web_backend",
+        "title": "Web backend: роутеры и сервисы",
+        "checks": [
+            chk.check_web_health_check,
+            chk.check_web_get_db_yields_session,
+            chk.check_web_get_users_endpoint,
+            chk.check_web_get_all_users_role_fallback,
+            chk.check_web_edit_user_updates_fields,
+            chk.check_web_delete_user_success,
+            chk.check_web_format_operation_api_fields,
+            chk.check_web_get_operations_pending_filter,
+            chk.check_web_confirm_reject_reassign_flow,
+            chk.check_web_excel_builder_has_sheets,
+            chk.check_breaker_web_unknown_tab_404,
+            chk.check_breaker_web_edit_user_not_found_404,
+            chk.check_breaker_web_delete_op_not_found_404,
+            chk.check_breaker_web_reassign_not_found_404,
+            chk.check_breaker_web_excel_empty_404,
+        ],
+    },
+    {
+        "id": "breaker_probes",
+        "title": "Негативные (ломающие) сценарии",
+        "checks": [
+            chk.check_breaker_permissions_module_import_cycle_probe,
+            chk.check_breaker_parse_operations_type_poison,
+            chk.check_breaker_parse_operations_card_rows_type_poison,
+            chk.check_breaker_import_quantity_format_dedup_gap,
+            chk.check_breaker_import_invalid_cardlist_shape,
+            chk.check_breaker_parse_api_datetime_naive_timezone,
+        ],
+    },
 ]
 
 GRAPH_EDGE_ORDER: list[str] = [n["id"] for n in GRAPH_NODES_SPEC]

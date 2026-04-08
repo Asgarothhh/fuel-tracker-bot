@@ -1,3 +1,31 @@
+# Структура документации и `prototiping/`
+
+## Новая структура документации (`docs/`)
+
+```text
+docs/
+├── README.md                 общий навигатор
+├── PROTOTIPING/
+│   ├── README.md
+│   └── MODULES/
+├── BOT_SRC/
+│   ├── README.md
+│   └── MODULES/
+├── WEB/
+│   ├── README.md
+│   └── MODULES/
+├── OCR/
+│   ├── README.md
+│   ├── PIPELINE.md
+│   ├── DATA_CONTRACTS.md
+│   ├── INTEGRATION.md
+│   ├── DEDUP_AND_VALIDATION.md
+│   └── TROUBLESHOOTING.md
+└── ... (legacy подробные документы)
+```
+
+---
+
 # Структура `prototiping/` по папкам
 
 Корень пакета: **`prototiping/`** (рядом с `src/` в репозитории).
@@ -6,15 +34,14 @@
 
 ```text
 prototiping/
-├── docs/                    ← эта документация
+├── docs/                    ← legacy-справка внутри модуля (может отличаться от `docs/`)
 │   ├── README.md
-│   ├── QUICKSTART.md        пошагово: тесты и сценарии
-│   ├── REPORT_TEMPLATE.md   шаблон отчёта и {{…}}
-│   ├── GRAPH_PREVIEW_HTML.md  страница graph_preview.html
+│   ├── QUICKSTART.md
+│   ├── REPORT_TEMPLATE.md
+│   ├── GRAPH_PREVIEW_HTML.md
 │   ├── HOW_IT_WORKS.md
-│   ├── STRUCTURE.md         этот файл
 │   ├── ADDING_SCENARIOS.md
-│   └── MODULES/             справочник по подпакетам (UPPERCASE)
+│   └── MODULES/
 │       ├── DB.md
 │       ├── CHECKS.md
 │       ├── GRAPH.md
@@ -24,7 +51,7 @@ prototiping/
 │       └── TESTS.md
 ├── checks/                  ← проверки и метаданные для отчёта
 │   ├── suite.py             функции check_* и список ALL_CHECKS
-│   └── scenarios.py         SCENARIO_META (id S01…, заголовки, описания)
+│   └── scenarios.py         SCENARIO_META (id S01…, kind P/N, версии)
 ├── graph/                   ← граф сценариев
 │   ├── spec.py              GRAPH_NODES_SPEC, GRAPH_EDGE_ORDER
 │   ├── trace.py             run_prototype_traced(), JSON-трассировка
@@ -95,8 +122,8 @@ flowchart LR
 
 ## Справочник API по подпакетам
 
-Таблица со ссылками на файлы в **`docs/MODULES/`** — в [README.md](README.md).
+Справочник по `prototiping/*` теперь находится в **`docs/PROTOTIPING/MODULES/`** (см. [docs/README.md](README.md)).
 
 ---
 
-← [Как это работает](HOW_IT_WORKS.md) · [Оглавление](README.md) · [Добавление сценариев →](ADDING_SCENARIOS.md)
+← [Как это работает](PROTOTIPING/HOW_IT_WORKS.md) · [Оглавление](README.md) · [Добавление сценариев →](PROTOTIPING/ADDING_SCENARIOS.md)
