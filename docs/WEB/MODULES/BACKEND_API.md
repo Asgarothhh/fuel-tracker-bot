@@ -11,10 +11,10 @@
 
 ```mermaid
 flowchart LR
-    U[/api/users] --> DB[(User)]
-    O[/api/operations] --> DB[(FuelOperation)]
-    R[/api/reports/excel] --> X[excel_report]
-    H[/api/health] --> OK[status=ok]
+    U["GET /api/users"] --> DBU["User"]
+    O["GET|POST /api/operations/..."] --> DBO["FuelOperation"]
+    R["GET /api/reports/excel"] --> X["excel_report"]
+    H["GET /api/health"] --> OK["status=ok"]
 ```
 
 ## Endpoints: подробный справочник

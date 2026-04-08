@@ -1,4 +1,4 @@
-# Структура документации и `prototiping/`
+# Структура документации, `src/`, `web/` и `prototiping/`
 
 ## Новая структура документации (`docs/`)
 
@@ -23,6 +23,119 @@ docs/
 │   └── TROUBLESHOOTING.md
 └── ... (legacy подробные документы)
 ```
+
+---
+
+# Структура `src/` по папкам
+
+Корневой runtime backend/бота: **`src/`**.
+
+## Дерево каталогов (упрощённо)
+
+```text
+src/
+├── run_bot.py                      точка входа Telegram-бота
+├── migrate_old_ops.py              служебная миграция операций
+├── ocr/
+│   ├── engine.py                   OCR-пайплайн (Tesseract + LLM + save)
+│   └── schemas.py                  Pydantic-контракты OCR
+└── app/
+    ├── config.py                   env-конфигурация
+    ├── db.py                       engine/session/init_db
+    ├── models.py                   ORM-модели домена
+    ├── permissions.py              middleware + permission checks
+    ├── tokens.py                   lifecycle кодов привязки
+    ├── import_logic.py             импорт/дедуп операций API
+    ├── belorusneft_api.py          HTTP-клиент внешнего API
+    ├── jobs.py                     плановые задачи импорта
+    ├── scheduler.py                APScheduler и управление расписанием
+    ├── excel_export.py             экспорт отчетов в Excel
+    ├── plate_util.py               нормализация гос.номеров
+    ├── welcome_store.py            хранение приветственных артефактов
+    ├── legacy_ssl.py               адаптер совместимости TLS
+    ├── bot_ref.py                  референс на bot-инстанс для уведомлений
+    ├── manage.py                   служебные команды/операции
+    ├── seed.py                     заполнение тестовых данных
+    ├── bot_handlers.py             совместимый слой регистрации handler'ов
+    └── bot/
+        ├── __init__.py
+        ├── register.py             центральная регистрация роутов/handler'ов
+        ├── keyboards.py            inline/reply клавиатуры
+        ├── notifications.py        уведомления пользователям
+        ├── utils.py                утилиты telegram-слоя
+        └── handlers/
+            ├── __init__.py
+            ├── user.py             user-flow + FSM + OCR/manual path
+            ├── admin_users.py      админские user-команды
+            ├── admin_import.py     админский запуск импорта
+            └── admin_schedules.py  админское управление расписанием
+```
+
+## Карта модулей `src`
+
+```mermaid
+flowchart LR
+    RB["run_bot.py"] --> BOT["app/bot/register.py"]
+    BOT --> HND["app/bot/handlers/*.py"]
+    HND --> PERM["app/permissions.py"]
+    HND --> DB["app/db.py + app/models.py"]
+    HND --> OCR["ocr/engine.py"]
+    HND --> XLS["app/excel_export.py"]
+    JOBS["app/jobs.py"] --> IMP["app/import_logic.py"]
+    IMP --> API["app/belorusneft_api.py"]
+    IMP --> DB
+```
+
+---
+
+# Структура `web/` по папкам
+
+Веб-домен: FastAPI backend и React frontend в одной папке **`web/`**.
+
+## Дерево каталогов (упрощённо)
+
+```text
+web/
+├── backend/
+│   ├── main.py                     FastAPI app + CORS + router include
+│   ├── dependencies.py             DI для DB session
+│   ├── schemas.py                  Pydantic-схемы API
+│   ├── requirements.txt            доп. зависимости backend
+│   ├── routers/
+│   │   ├── operations.py           /api/operations/*
+│   │   ├── users.py                /api/users/*
+│   │   └── reports.py              /api/reports/*
+│   └── services/
+│       ├── api_import_web.py       импорт API через web-слой
+│       ├── excel_report.py         генерация excel-файлов
+│       └── __init__.py
+└── frontend/
+    ├── package.json                скрипты dev/build/lint
+    ├── vite.config.ts              Vite-конфигурация
+    ├── index.html
+    ├── README.md
+    ├── src/
+    │   ├── main.tsx
+    │   ├── App.tsx
+    │   ├── api.ts                  HTTP-клиент frontend -> backend
+    │   ├── pages/                  основные экраны админки
+    │   ├── components/admin/       UI-компоненты и модалки
+    │   └── styles/                 css-стили
+    └── public/
+        └── icons.svg
+```
+
+## Карта endpoint'ов (backend)
+
+```mermaid
+flowchart LR
+    U["GET /api/users"] --> DBU["User"]
+    O["GET|POST /api/operations/..."] --> DBO["FuelOperation"]
+    R["GET /api/reports/excel"] --> X["Excel report file"]
+    H["GET /api/health"] --> OK["status: ok"]
+```
+
+> Примечание: если Mermaid не рендерится, проверь, что в узлах нет необрамленных символов `/` и `|`; безопаснее использовать подписи в кавычках как в примере выше.
 
 ---
 
