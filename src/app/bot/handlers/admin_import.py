@@ -554,8 +554,9 @@ async def cmd_recent_ops(message: types.Message):
         lines = [
             f"#{o.id} | {o.status} | {o.date_time.strftime('%d.%m %H:%M') if o.date_time else ''} | {o.car_from_api or ''}"
             for o in ops]
-        await message.reply("🕒 **Последние 15 операций:**\n\n" + "\n".join(lines), parse_mode="Markdown")
 
+        # Исправленная строка:
+        await message.reply("🕒 <b>Последние 15 операций:</b>\n\n" + "\n".join(lines), parse_mode="HTML")
 
 @require_permission("admin:manage")
 async def btn_update_import(message: types.Message):

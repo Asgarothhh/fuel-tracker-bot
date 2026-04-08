@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 
-from aiogram import F, types
+from aiogram import F, types, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -28,7 +28,7 @@ from src.app.bot.keyboards import (
     get_ocr_edit_choice_kb,
     get_personal_car_pick_kb,
     reply_keyboard_admin,
-    reply_keyboard_user,
+    reply_keyboard_user, BTN_USER_LINK_ACCOUNT, BTN_USER_CHANGE_CARD, reply_keyboard_unauthorized,
 )
 from src.app.bot.notifications import send_operation_to_user
 from src.app.bot.utils import extract_args
@@ -67,6 +67,12 @@ def _create_manual_draft_op(telegram_id: int) -> int | None:
 class RegistrationStates(StatesGroup):
     waiting_for_name = State()
     waiting_for_card = State()
+
+class CardUpdateStates(StatesGroup):
+    waiting_for_new_card = State()
+
+class LinkStates(StatesGroup):
+    waiting_for_code = State()
 
 
 class ReceiptStates(StatesGroup):
@@ -150,9 +156,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
                         parse_mode="Markdown",
                     )
             else:
-                await message.reply(
-                    "⏳ Ваш аккаунт ожидает активации администратором.\n"
-                    "Если у вас есть код доступа, введите его сейчас."
+                # ИСПРАВЛЕНИЕ: Добавляем кнопку привязки для неактивных
+                from src.app.bot.keyboards import reply_keyboard_unauthorized
+                await message.answer(
+                    "⏳ Ваш аккаунт ожидает активации.\n\n"
+                    "Если у вас есть код, нажмите кнопку ниже или введите его: `/link код`",
+                    reply_markup=reply_keyboard_unauthorized(),  # <--- ЭТО ВАЖНО
+                    parse_mode="Markdown"
                 )
             return
 
@@ -160,6 +170,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
     await message.answer(
         "👋 **Добро пожаловать!**\n\nДля начала работы необходимо зарегистрироваться.\n"
         "Введите ваше **ФИО** (полностью):",
+        reply_markup=types.ReplyKeyboardRemove(),
         parse_mode="Markdown"
     )
     await state.set_state(RegistrationStates.waiting_for_name)
@@ -207,9 +218,45 @@ async def process_reg_card(message: types.Message, state: FSMContext):
             return
 
         db.commit()
-        await message.reply("Регистрация завершена! Ожидайте активации администратором.")
+        await message.answer(
+            "✅ **Регистрация успешно завершена!**\n\nВыберите нужное действие в меню ниже:",
+            reply_markup=reply_keyboard_unauthorized(),  # <--- ВОТ ЭТА СТРОЧКА РЕШАЕТ ПРОБЛЕМУ
+            parse_mode="Markdown"
+        )
     await state.clear()
 
+
+# 2. Хендлер нажатия на кнопку
+async def btn_change_card(message: types.Message, state: FSMContext):
+    await message.answer(
+        "💳 **Введите новый номер вашей топливной карты:**\n\n"
+        "*(Если у вас несколько карт, введите их через запятую)*",
+        parse_mode="Markdown",
+        reply_markup=types.ReplyKeyboardRemove()  # Временно прячем меню
+    )
+    await state.set_state(CardUpdateStates.waiting_for_new_card)
+
+
+# 3. Хендлер получения самого номера карты
+async def process_new_card(message: types.Message, state: FSMContext):
+    new_cards_raw = message.text.strip()
+    # Разбиваем по запятой и удаляем лишние пробелы, если ввели несколько
+    cards_list = [c.strip() for c in new_cards_raw.split(",") if c.strip()]
+
+    with get_db_session() as db:
+        user = db.query(User).filter(User.telegram_id == message.from_user.id).first()
+        if user:
+            user.cards = cards_list  # Сохраняем массив карт (JSON/Array)
+            db.commit()
+            await message.answer(
+                f"✅ **Карта успешно обновлена!**\nТекущие карты: {', '.join(cards_list)}",
+                parse_mode="Markdown",
+                reply_markup=reply_keyboard_user()  # Возвращаем меню
+            )
+        else:
+            await message.answer("❌ Ошибка: Профиль не найден.", reply_markup=reply_keyboard_user())
+
+    await state.clear()
 
 async def old_cmd_start(message: types.Message):
     with get_db_session() as db:
@@ -275,69 +322,84 @@ async def cmd_myprofile(message: types.Message):
     await message.reply(f"ФИО: {full_name}\nКарты: {cards_s}\nАвто: {cars_s}")
 
 
-async def cmd_link(message: types.Message):
-    args = extract_args(message)
-    if not args:
-        await message.reply("Введите: /link <код> (код выдаёт администратор).")
-        return
+async def cmd_link(message: types.Message, state: FSMContext):
+    # 1. Проверяем, не является ли сообщение просто текстом кнопки
+    if message.text == BTN_USER_LINK_ACCOUNT:
+        await message.answer(
+            "🔑 **Введите код привязки**\n\nОтправьте код администратора ответным сообщением.",
+            parse_mode="Markdown",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+        await state.set_state(LinkStates.waiting_for_code)
+        return  # Важно выйти здесь!
 
-    code = args.split()[0]
+    # 2. Если это команда /link [код]
+    args = extract_args(message)
+    if args:
+        code = args.split()[0]
+        # Если в коде случайно оказался текст кнопки (защита от дурака)
+        if code == BTN_USER_LINK_ACCOUNT:
+            await message.answer("Пожалуйста, введите сам цифровой/буквенный код.")
+            return
+
+        return await process_link_logic(message, code, state)
+
+    # 3. Если просто /link без ничего
+    await message.answer(
+        "🔑 **Введите код привязки**\n\nОтправьте код администратора ответным сообщением.",
+        parse_mode="Markdown",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+    await state.set_state(LinkStates.waiting_for_code)
+
+
+async def process_link_message(message: types.Message, state: FSMContext):
+    code = message.text.strip()
+    await process_link_logic(message, code, state)
+
+
+# 3. Общая логика обработки (твой исходный код с проверками)
+async def process_link_logic(message: types.Message, code: str, state: FSMContext):
+    await state.clear()  # Сбрасываем состояние сразу
 
     with get_db_session() as db:
-        # 1. Проверяем и "гасим" код в базе
+        # 1. Проверяем код
         ok, result = verify_and_consume_code(db, code, message.from_user.id)
 
         if not ok:
-            reason = result
-            # ... (логика обработки ошибок остается прежней)
-            if reason == "invalid_or_used":
-                await message.reply("Код неверен или уже использован.")
-            elif reason == "expired":
-                await message.reply("Код просрочен.")
-            elif reason == "already_linked_to_other":
-                await message.reply("Эта запись уже привязана к другому Telegram.")
-            else:
-                await message.reply("Ошибка привязки.")
+            # Твоя логика ошибок
+            error_msgs = {
+                "invalid_or_used": "Код неверен или уже использован.",
+                "expired": "Код просрочен.",
+                "already_linked_to_other": "Эта запись уже привязана к другому Telegram."
+            }
+            await message.reply(error_msgs.get(result, "Ошибка привязки."))
             return
 
-        # 2. Получаем ID пользователя из результата проверки кода
-        user_id = None
-        if isinstance(result, dict) and "user_id" in result:
-            user_id = result["user_id"]
-        elif hasattr(result, "user_id"):
-            user_id = result.user_id
+        # 2. Получаем ID пользователя
+        user_id = result.get("user_id") if isinstance(result, dict) else getattr(result, "user_id", None)
 
         if not user_id:
             await message.reply("Ошибка: запись пользователя не найдена.")
             return
 
-        # 3. Загружаем объект пользователя для редактирования
+        # 3. Активация
         user = db.query(User).filter(User.id == user_id).first()
-
         if user:
-            # АКТИВАЦИЯ
             user.active = True
-
-            # НАЗНАЧЕНИЕ РОЛИ (Обязательно!)
-            # Если у тебя в базе роль обычного пользователя имеет ID 1, ставь 1.
-            # Без role_id Middleware будет считать, что у юзера нет прав.
             if not user.role_id:
                 user.role_id = 2
-
-                # СОХРАНЕНИЕ
             db.commit()
 
-            # Подготовка данных для ответа
-            full_name = user.full_name
             cards_s = ", ".join(user.cards or []) or "—"
-            cars_s = ", ".join(user.cars or []) or "—"  # исправлено: берем из user.cars
+            cars_s = ", ".join(user.cars or []) or "—"
 
             await message.reply(
                 f"✅ **Аккаунт успешно активирован!**\n\n"
-                f"ФИО: {full_name}\n"
+                f"ФИО: {user.full_name}\n"
                 f"Карты: {cards_s}\n"
                 f"Авто: {cars_s}",
-                reply_markup=reply_keyboard_user(),  # Сразу даем кнопки пользователя
+                reply_markup=reply_keyboard_user(),
                 parse_mode="Markdown"
             )
         else:
@@ -501,6 +563,17 @@ MANUAL_RECEIPT_HELP = """⌨️ **Ввод данных чека вручную*
 
 **Обязательно:** топливо, литры, номер чека, дата, время.  
 **По желанию:** сумма, АЗС."""
+
+
+async def callback_fuel_card_reject(call: types.CallbackQuery, state: FSMContext):
+    operation_id = int(call.data.split("_")[-1])
+
+    # Сохраняем ID операции в контекст, чтобы знать, к чему привязать ФИО
+    await state.update_data(disputed_op_id=operation_id)
+    await state.set_state(ReceiptStates.waiting_for_real_fueler)
+
+    await call.message.answer("Понял. Напишите, пожалуйста, ФИО сотрудника, который заправлялся по этой карте?")
+    await call.answer()
 
 
 def _manual_prefill_from_operation(op: FuelOperation) -> str:
@@ -884,6 +957,38 @@ async def process_personal_car_plate(message: types.Message, state: FSMContext):
     )
 
 
+async def send_operation_to_user(bot: Bot, telegram_id: int, operation_id: int):
+    try:
+        with get_db_session() as db:
+            op = db.query(FuelOperation).get(operation_id)
+            if not op: return
+
+            api = op.api_data if isinstance(op.api_data, dict) else {}
+            row = api.get("row") if isinstance(api.get("row"), dict) else {}
+
+            dt = op.date_time.strftime("%d.%m.%Y %H:%M") if op.date_time else "—"
+            fuel = api.get("productName") or row.get("productName") or "—"
+            qty = api.get("productQuantity") or row.get("productQuantity") or "—"
+            azs = api.get("azsNumber") or row.get("azsNumber") or row.get("AzsCode") or "—"
+            doc = op.doc_number or api.get("docNumber") or row.get("docNumber") or "—"
+
+        text = (
+            f"По вашей топливной карте обнаружена заправка за {dt}.\n"
+            f"Топливо: {fuel}.\n"
+            f"Количество: {qty} л.\n"
+            f"АЗС: {azs}.\n"
+            f"Чек: {doc}.\n\n"
+            f"Это действительно была ваша заправка?"
+        )
+        await bot.send_message(
+            chat_id=telegram_id,
+            text=text,
+            reply_markup=get_fuel_card_confirm_kb(operation_id)
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки: {e}")
+
+
 async def process_personal_fueler_name(message: types.Message, state: FSMContext):
     data = await state.get_data()
     op_id = data.get("op_id")
@@ -1262,6 +1367,11 @@ def register_user_handlers(dp):
     dp.message.register(process_confirmed_car, ReceiptStates.waiting_for_confirmed_car)
     dp.message.register(process_disputed_car, ReceiptStates.waiting_for_disputed_car)
     dp.message.register(process_real_fueler_name, ReceiptStates.waiting_for_real_fueler)
+    dp.message.register(cmd_link, F.text == BTN_USER_LINK_ACCOUNT)
+    dp.message.register(process_link_message, LinkStates.waiting_for_code)
+    dp.message.register(btn_change_card, F.text == BTN_USER_CHANGE_CARD)
+    dp.message.register(process_new_card, CardUpdateStates.waiting_for_new_card)
+
     dp.message.register(btn_user_cars_menu, F.text == BTN_USER_CARS)
     dp.message.register(process_add_new_car, ReceiptStates.waiting_for_new_car_add)
     dp.message.register(cmd_pending, Command(commands=["pending"]))
